@@ -152,7 +152,7 @@ async function unlock() {
     info.value = await api.post<TrackInfo>(`/api/track/${encodeURIComponent(number.value)}/unlock`, { pin: pin.value })
   } catch (e) {
     if (e instanceof ApiError && e.status === 400) {
-      unlockError.value = 'Wrong access code. Doubly和朋友-check it.' as unknown as string
+      unlockError.value = 'Wrong access code. Double-check it.'
     } else {
       unlockError.value = e instanceof ApiError ? e.message : 'Something went wrong.'
     }
