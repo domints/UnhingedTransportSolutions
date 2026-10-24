@@ -1,9 +1,10 @@
-using System.Text;
+using System.Globalization;
 using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 using Dapper;
 using Microsoft.Extensions.Options;
+using Telegram.Bot;
+using Telegram.Bot.Types;
+using Telegram.Bot.Types.ReplyMarkups;
 using Uts.Api.Db;
 using Uts.Api.Domain;
 
@@ -11,19 +12,16 @@ namespace Uts.Api.Services;
 
 /// <summary>Background service: long-polling Telegram bot (commands, claim,
 /// mute toggles, courier workflow) plus the outbox sender (retries, backoff).
-/// Disabled cleanly when no bot token is configured.</summary>
+/// Built on the Telegram.Bot library; disabled cleanly when no bot token is
+/// configured.</summary>
 public sealed class TelegramBot(
     IOptions<TelegramOptions> options,
-    IHttpClientFactory httpFactory,
     BotState botState,
     Database db,
     TelegramNotifier telegram,
     TripBulk tripBulk,
     ILogger<TelegramBot> logger) : BackgroundService
 {
-    private const string ApiBase = "https://api.telegram.org/";
-    private static readonly JsonSerializerOptions Json = new();
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var opts = options.Value;
@@ -33,53 +31,47 @@ public sealed class TelegramBot(
             return;
         }
 
-        var http = httpFactory.CreateClient();
-        // Token goes into the base address, NOT the request path: the token
-        // contains a colon, so a string like "bot8966223705:AA…/getMe" is parsed
-        // as an absolute URI with scheme "bot8966223705" and HttpClient throws
-        // «The 'bot…' scheme is not supported». Relative paths ("getMe") resolve
-        // against the base — no colon parsing involved.
-        http.BaseAddress = new Uri($"{ApiBase}bot{opts.BotToken}/");
-        http.Timeout = TimeSpan.FromSeconds(70); // long polling needs patience
+        var bot = new TelegramBotClient(opts.BotToken);
 
-        string? username;
+        User me;
         try
         {
-            username = TryGetUsername(await CallAsync(http, "getMe", null, stoppingToken));
+            me = await bot.GetMe(stoppingToken);
         }
         catch (Exception ex)
         {
             // A flaky network / Telegram hiccup at boot must not take the whole
-            // app down — the bot is an optional module.
+            // app down — the bot is an optional module (and the host is not
+            // configured to stop on background-service exceptions either).
             logger.LogWarning(ex, "Telegram: getMe failed — module disabled for this run.");
             return;
         }
-        if (string.IsNullOrEmpty(username))
+        if (string.IsNullOrEmpty(me.Username))
         {
-            logger.LogError("Telegram: getMe failed — module disabled. Check the bot token.");
+            logger.LogError("Telegram: getMe returned no username — module disabled. Check the bot token.");
             return;
         }
-        botState.BotUsername = username;
-        logger.LogInformation("Telegram bot active as @{name}.", username);
+        botState.BotUsername = me.Username;
+        logger.LogInformation("Telegram bot active as @{name}.", me.Username);
 
-        long offset = 0;
+        var offset = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await DrainOutboxAsync(http, opts, stoppingToken);
+                await DrainOutboxAsync(bot, opts, stoppingToken);
 
-                var updates = await GetUpdatesAsync(http, opts.BotToken, offset, stoppingToken);
+                var updates = await bot.GetUpdates(offset, timeout: 25, cancellationToken: stoppingToken);
                 foreach (var u in updates)
                 {
-                    offset = u.UpdateId + 1;
+                    offset = (int)u.Id + 1;
                     try
                     {
-                        await HandleUpdateAsync(http, opts, u, stoppingToken);
+                        await HandleUpdateAsync(bot, opts, u, stoppingToken);
                     }
                     catch (Exception ex)
                     {
-                        logger.LogWarning(ex, "Telegram: failed to handle update {id}.", u.UpdateId);
+                        logger.LogWarning(ex, "Telegram: failed to handle update {id}.", u.Id);
                     }
                 }
             }
@@ -97,63 +89,63 @@ public sealed class TelegramBot(
 
     // ---------------------------------------------------------------- updates
 
-    private async Task HandleUpdateAsync(HttpClient http, TelegramOptions opts, TgUpdate u, CancellationToken ct)
+    private async Task HandleUpdateAsync(TelegramBotClient bot, TelegramOptions opts, Update u, CancellationToken ct)
     {
         if (u.CallbackQuery is { } cb)
         {
-            var chatId = (cb.Message?.Chat.Id ?? cb.From.Id).ToString();
-            await HandleCallbackAsync(http, opts, chatId, cb, ct);
+            var chatId = cb.Message?.Chat.Id ?? cb.From.Id;
+            await HandleCallbackAsync(bot, opts, chatId, cb, ct);
             return;
         }
 
         var msg = u.Message;
         if (msg?.Text is not { } text)
             return;
+        var chatId2 = msg.Chat.Id;
         if (!text.StartsWith('/'))
         {
-            await SendAsync(http, opts.BotToken!, msg.Chat.Id.ToString(), TelegramTexts.Help, null, ct);
+            await SendAsync(bot, chatId2, TelegramTexts.Help, null, ct);
             return;
         }
 
-        var chatId2 = msg.Chat.Id.ToString();
         var parts = text.Split(' ', 2, StringSplitOptions.TrimEntries);
         var command = parts[0].Split('@')[0].ToLowerInvariant();
 
         switch (command)
         {
             case "/start":
-                if (parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1])) await ClaimAsync(http, chatId2, parts[1], ct);
-                else await SendAsync(http, opts.BotToken!, chatId2, TelegramTexts.Help, null, ct);
+                if (parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1])) await ClaimAsync(bot, chatId2, parts[1], ct);
+                else await SendAsync(bot, chatId2, TelegramTexts.Help, null, ct);
                 break;
 
             case "/help":
-                await SendAsync(http, opts.BotToken!, chatId2, TelegramTexts.Help, null, ct);
+                await SendAsync(bot, chatId2, TelegramTexts.Help, null, ct);
                 break;
 
             case "/notifications":
-                await ShowNotificationTogglesAsync(http, chatId2, ct);
+                await ShowNotificationTogglesAsync(bot, chatId2, ct);
                 break;
 
             case "/leaving":
-                await PickTripAsync(http, chatId2, ShipmentStatus.InTransit,
+                await PickTripAsync(bot, chatId2, ShipmentStatus.InTransit,
                     "Najbliższa podróż — oznaczyć paczki jako w drodze? 🚆", leavePrefix, ct);
                 break;
 
             case "/arrived":
-                await PickTripAsync(http, chatId2, ShipmentStatus.AtDestination,
+                await PickTripAsync(bot, chatId2, ShipmentStatus.AtDestination,
                     "Dotarłeś? Oznaczyć paczki jako dotarłe do miasta docelowego? 📍", arrivePrefix, ct);
                 break;
 
             case "/deliver":
-                await ShowDeliverableAsync(http, chatId2, ct);
+                await ShowDeliverableAsync(bot, chatId2, ct);
                 break;
 
             case "/packlist":
-                await ShowPacklistAsync(http, chatId2, ct);
+                await ShowPacklistAsync(bot, chatId2, ct);
                 break;
 
             default:
-                await SendAsync(http, opts.BotToken!, chatId2, TelegramTexts.Help, null, ct);
+                await SendAsync(bot, chatId2, TelegramTexts.Help, null, ct);
                 break;
         }
     }
@@ -163,14 +155,21 @@ public sealed class TelegramBot(
 
     // ---------------------------------------------------------------- callbacks
 
-    private async Task HandleCallbackAsync(HttpClient http, TelegramOptions opts, string chatId, TgCallbackQuery cb, CancellationToken ct)
+    private async Task HandleCallbackAsync(TelegramBotClient bot, TelegramOptions opts, long chatId, CallbackQuery cb, CancellationToken ct)
     {
         var data = cb.Data ?? "";
-        async Task Finish(string? toast = null) => await AnswerCallbackAsync(http, opts.BotToken!, cb.Id, toast, ct);
+        async Task Finish(string? toast = null)
+        {
+            try
+            {
+                await bot.AnswerCallbackQuery(cb.Id, toast, cancellationToken: ct);
+            }
+            catch { /* cosmetic, never fatal */ }
+        }
 
         if (data.StartsWith("mute:") || data.StartsWith("unmute:"))
         {
-            await SetMuteAsync(http, chatId, data, ct);
+            await SetMuteAsync(bot, chatId, data, ct);
             await Finish();
             return;
         }
@@ -193,15 +192,16 @@ public sealed class TelegramBot(
             var result = await tripBulk.MarkAllAsync(conn, tripId, to);
             if (result is null)
             {
-                await SendAsync(http, opts.BotToken!, chatId, "Nie ma takiej podróży.", null, ct);
+                await SendAsync(bot, chatId, "Nie ma takiej podróży.", null, ct);
             }
             else
             {
-                var summary = $"Oznaczono {result.Updated.Count} paczek: {TelegramTexts.StatusLabel(result.To)} ✅";
+                var summary = $"Oznaczono {result.Updated.Count} paczek: {TelegramTexts.StatusLabel(result.To)}";
+                summary += ShipmentStatus.AtDestination == to ? " 📍" : " 🚆";
                 if (result.Skipped.Count > 0)
                     summary += "\nPominięto (status niedopuszczający zmiany): " +
                                string.Join(", ", result.Skipped.Select(s => s.ToString()).Take(10));
-                await SendAsync(http, opts.BotToken!, chatId, summary, null, ct);
+                await SendAsync(bot, chatId, summary, null, ct);
             }
             await Finish();
             return;
@@ -227,7 +227,7 @@ public sealed class TelegramBot(
                 await Finish();
                 return;
             }
-            await SendAsync(http, opts.BotToken!, chatId, $"Dostarczyć {sh.Number}?",
+            await SendAsync(bot, chatId, $"Dostarczyć {sh.Number}?",
                 Inline(("✅ Tak, dostarczona", $"deliverok:{shipId}"), ("❌ Nie", "noop")), ct);
             await Finish();
             return;
@@ -267,14 +267,14 @@ public sealed class TelegramBot(
             await tx.CommitAsync(ct);
 
             await Finish();
-            await SendAsync(http, opts.BotToken!, chatId, $"Paczka {sh2.Number} dostarczona ✅", null, ct);
+            await SendAsync(bot, chatId, $"Paczka {sh2.Number} dostarczona ✅", null, ct);
             return;
         }
 
         await Finish();
     }
 
-    private async Task SetMuteAsync(HttpClient http, string chatId, string data, CancellationToken ct)
+    private async Task SetMuteAsync(TelegramBotClient bot, long chatId, string data, CancellationToken ct)
     {
         var mute = data.StartsWith("mute:");
         if (!long.TryParse(data[(data.IndexOf(':') + 1)..], out var clientId))
@@ -282,8 +282,8 @@ public sealed class TelegramBot(
 
         await using var conn = await db.OpenAsync(ct);
         var owned = await conn.ExecuteScalarAsync<bool>(
-            "SELECT EXISTS (SELECT 1 FROM clients WHERE id = @id AND telegram_chat_id::text = @chatId)",
-            new { id = clientId, chatId });
+            "SELECT EXISTS (SELECT 1 FROM clients WHERE id = @id AND telegram_chat_id = @chatId)",
+            new { id = clientId, chatId = chatId.ToString(CultureInfo.InvariantCulture) });
         if (!owned)
             return; // another chat tried to flip someone else's switch
 
@@ -291,12 +291,12 @@ public sealed class TelegramBot(
             new { id = clientId, v = !mute });
 
         var name = await conn.ExecuteScalarAsync<string>("SELECT name FROM clients WHERE id = @id", new { id = clientId });
-        await dbSend(http, chatId, mute
+        await SendAsync(bot, chatId, mute
             ? $"Powiadomienia wyciszone 🔕 ({name})"
             : $"Powiadomienia włączone 🔔 ({name})", null, ct);
     }
 
-    private async Task ClaimAsync(HttpClient http, string chatId, string code, CancellationToken ct)
+    private async Task ClaimAsync(TelegramBotClient bot, long chatId, string code, CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
         var client = await conn.QuerySingleOrDefaultAsync<(long Id, string Name)>(
@@ -304,7 +304,7 @@ public sealed class TelegramBot(
             new { code = code.Trim().ToUpperInvariant() });
         if (client.Id == 0)
         {
-            await dbSend(http, chatId, TelegramTexts.ClaimInvalid, null, ct);
+            await SendAsync(bot, chatId, TelegramTexts.ClaimInvalid, null, ct);
             return;
         }
 
@@ -315,20 +315,20 @@ public sealed class TelegramBot(
                 telegram_claim_code = NULL,
                 telegram_claim_expires = NULL
             WHERE id = @id
-            """, new { chatId, id = client.Id });
+            """, new { chatId = chatId.ToString(CultureInfo.InvariantCulture), id = client.Id });
 
-        await dbSend(http, chatId, $"{TelegramTexts.ClaimOk}\nPowiązane z: {client.Name}.", null, ct);
+        await SendAsync(bot, chatId, $"{TelegramTexts.ClaimOk}\nPowiązane z: {client.Name}.", null, ct);
     }
 
-    private async Task ShowNotificationTogglesAsync(HttpClient http, string chatId, CancellationToken ct)
+    private async Task ShowNotificationTogglesAsync(TelegramBotClient bot, long chatId, CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
         var rows = (await conn.QueryAsync<(long Id, string Name, bool Enabled)>(
-            "SELECT id, name, telegram_notifications FROM clients WHERE telegram_chat_id::text = @chatId ORDER BY name",
-            new { chatId })).AsList();
+            "SELECT id, name, telegram_notifications FROM clients WHERE telegram_chat_id = @chatId ORDER BY name",
+            new { chatId = chatId.ToString(CultureInfo.InvariantCulture) })).AsList();
         if (rows.Count == 0)
         {
-            await dbSend(http, chatId, TelegramTexts.NoBinding, null, ct);
+            await SendAsync(bot, chatId, TelegramTexts.NoBinding, null, ct);
             return;
         }
 
@@ -338,15 +338,16 @@ public sealed class TelegramBot(
             var button = c.Enabled
                 ? ("🔕 Wycisz powiadomienia", $"mute:{c.Id}")
                 : ("🔔 Włącz powiadomienia", $"unmute:{c.Id}");
-            await dbSend(http, chatId, $"Powiadomienia dla {c.Name}: {state}", Inline(button), ct);
+            await SendAsync(bot, chatId, $"Powiadomienia dla {c.Name}: {state}", Inline(button), ct);
         }
     }
 
     // ---------------------------------------------------------------- courier
 
-    private bool IsCourier(TelegramOptions opts, string chatId) => opts.CourierChatIdSet().Contains(chatId);
+    private bool IsCourier(TelegramOptions opts, long chatId) =>
+        opts.CourierChatIdSet().Contains(chatId.ToString(CultureInfo.InvariantCulture));
 
-    private async Task PickTripAsync(HttpClient http, string chatId, string to, string question, string callbackPrefix, CancellationToken ct)
+    private async Task PickTripAsync(TelegramBotClient bot, long chatId, string to, string question, string callbackPrefix, CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
         var trips = (await conn.QueryAsync<(long Id, string Title, DateTime? PlannedDate, int Count)>(
@@ -361,17 +362,16 @@ public sealed class TelegramBot(
             """)).AsList();
         if (trips.Count == 0)
         {
-            await dbSend(http, chatId, "Brak zaplanowanych podróży.", null, ct);
+            await SendAsync(bot, chatId, "Brak zaplanowanych podróży.", null, ct);
             return;
         }
 
-        var buttons = trips
-            .Select(t => ($"{t.Title} ({(t.PlannedDate is { } d ? d.ToString("dd.MM") : "—")}) · paczek: {t.Count}", $"{callbackPrefix}{t.Id}"))
-            .ToArray();
-        await dbSend(http, chatId, question, Inline(buttons), ct);
+        await SendAsync(bot, chatId, question, Keyboard(trips.Select(t =>
+            (Text: $"{t.Title} ({(t.PlannedDate is { } d ? d.ToString("dd.MM") : "—")}) · paczek: {t.Count}",
+             Cb: $"{callbackPrefix}{t.Id}")).ToArray()), ct);
     }
 
-    private async Task ShowDeliverableAsync(HttpClient http, string chatId, CancellationToken ct)
+    private async Task ShowDeliverableAsync(TelegramBotClient bot, long chatId, CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
         var rows = (await conn.QueryAsync<(long Id, string Number, string RecipientName)>(
@@ -385,17 +385,15 @@ public sealed class TelegramBot(
             """)).AsList();
         if (rows.Count == 0)
         {
-            await dbSend(http, chatId, "Brak paczek w drodze — wszystko dostarczone. 🎉", null, ct);
+            await SendAsync(bot, chatId, "Brak paczek w drodze — wszystko dostarczone. 🎉", null, ct);
             return;
         }
 
-        var buttons = rows
-            .Select(s => ($"{s.Number} — {s.RecipientName}", $"deliver:{s.Id}"))
-            .ToArray();
-        await dbSend(http, chatId, "Które paczki dostarczyłeś?", Inline(buttons), ct);
+        await SendAsync(bot, chatId, "Które paczki dostarczyłeś?",
+            Keyboard(rows.Select(s => (Text: $"{s.Number} — {s.RecipientName}", Cb: $"deliver:{s.Id}")).ToArray()), ct);
     }
 
-    private async Task ShowPacklistAsync(HttpClient http, string chatId, CancellationToken ct)
+    private async Task ShowPacklistAsync(TelegramBotClient bot, long chatId, CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
         var trip = await conn.QuerySingleOrDefaultAsync<(long Id, string Title)>(
@@ -408,7 +406,7 @@ public sealed class TelegramBot(
             """);
         if (trip.Id == 0)
         {
-            await dbSend(http, chatId, "Brak zaplanowanych podróży.", null, ct);
+            await SendAsync(bot, chatId, "Brak zaplanowanych podróży.", null, ct);
             return;
         }
 
@@ -422,20 +420,20 @@ public sealed class TelegramBot(
             """, new { id = trip.Id })).AsList();
         if (haul.Count == 0)
         {
-            await dbSend(http, chatId, $"Packlist „{trip.Title}”: pusto. 📭", null, ct);
+            await SendAsync(bot, chatId, $"Packlist „{trip.Title}”: pusto. 📭", null, ct);
             return;
         }
 
         var lines = haul.Select(h =>
             $"• {h.Number} — {TelegramTexts.StatusLabel(h.Status)} — {h.Recipient} — {Truncate(h.Description, 40)}");
-        await dbSend(http, chatId, $"Packlist „{trip.Title}”:\n{string.Join('\n', lines)}", null, ct);
+        await SendAsync(bot, chatId, $"Packlist „{trip.Title}”:\n{string.Join('\n', lines)}", null, ct);
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
 
-    // ---------------------------------------------------------------- http plumbing
+    // ---------------------------------------------------------------- sending
 
-    private async Task DrainOutboxAsync(HttpClient http, TelegramOptions opts, CancellationToken ct)
+    private async Task DrainOutboxAsync(TelegramBotClient bot, TelegramOptions opts, CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
         var pending = (await conn.QueryAsync<(long Id, string ChatId, string Text, string? KeyboardJson)>(
@@ -451,7 +449,8 @@ public sealed class TelegramBot(
 
         foreach (var m in pending)
         {
-            var ok = await SendAsync(http, opts.BotToken!, m.ChatId, m.Text, m.KeyboardJson, ct);
+            var ok = long.TryParse(m.ChatId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var chatId)
+                     && await SendAsync(bot, chatId, m.Text, ParseKeyboard(m.KeyboardJson), ct);
             if (ok)
                 await conn.ExecuteAsync(
                     "UPDATE telegram_outbox SET sent_at = now(), last_attempt = now() WHERE id = @id", new { m.Id });
@@ -462,123 +461,54 @@ public sealed class TelegramBot(
         }
     }
 
-    private async Task<List<TgUpdate>> GetUpdatesAsync(HttpClient http, string token, long offset, CancellationToken ct)
+    /// <summary>Send + swallow network/API errors (returns false → outbox marks
+    /// the attempt; retry cap and backoff live in the DB).</summary>
+    private async Task<bool> SendAsync(TelegramBotClient bot, long chatId, string text, InlineKeyboardMarkup? keyboard, CancellationToken ct)
     {
-        var resp = await http.GetAsync($"getUpdates?offset={offset}&timeout=25", ct);
-        var body = await resp.Content.ReadAsStringAsync(ct);
-        using var doc = JsonDocument.Parse(body);
-        return doc.RootElement.TryGetProperty("result", out var result)
-            ? result.Deserialize<List<TgUpdate>>(Json) ?? []
-            : [];
-    }
-
-    private async Task<JsonDocument?> CallAsync(HttpClient http, string method, object? body, CancellationToken ct)
-    {
-        using var content = body is null
-            ? null
-            : new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
-        using var resp = body is null
-            ? await http.GetAsync(method, ct)
-            : await http.PostAsync(method, content!, ct);
-        var raw = await resp.Content.ReadAsStringAsync(ct);
         try
         {
-            return JsonDocument.Parse(raw);
+            await bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Telegram: SendTextMessage failed ({msg}).", ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>One-row keyboard of callback buttons.</summary>
+    private static InlineKeyboardMarkup Keyboard(params (string Text, string Cb)[] buttons)
+        => new(buttons.Select(b => new[] { InlineKeyboardButton.WithCallbackData(b.Text, b.Cb) }));
+
+    private static InlineKeyboardMarkup Inline(params (string Text, string Data)[] buttons) => Keyboard(buttons);
+
+    /// <summary>Outbox rows store a serialized Telegram inline keyboard (URL
+    /// buttons pointing at the tracking page). Parse it back into the
+    /// library's markup type.</summary>
+    private static InlineKeyboardMarkup? ParseKeyboard(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("inline_keyboard", out var rows))
+                return null;
+            var markup = rows.EnumerateArray()
+                .Select(row => row.EnumerateArray().Select(button =>
+                {
+                    var text = button.TryGetProperty("text", out var t) ? t.GetString() ?? "?" : "?";
+                    return button.TryGetProperty("url", out var url)
+                        ? InlineKeyboardButton.WithUrl(text, url.GetString() ?? "")
+                        : InlineKeyboardButton.WithCallbackData(text,
+                              button.TryGetProperty("callback_data", out var d) ? d.GetString() ?? "" : "");
+                }).ToArray());
+            return new InlineKeyboardMarkup(markup);
         }
         catch
         {
             return null;
         }
-    }
-
-    private static async Task<bool> SendAsync(HttpClient http, string token, string chatId, string text, string? keyboardJson, CancellationToken ct)
-    {
-        var payload = new JsonObject { ["chat_id"] = long.Parse(chatId), ["text"] = text };
-        if (!string.IsNullOrEmpty(keyboardJson))
-            payload["reply_markup"] = JsonNode.Parse(keyboardJson);
-        using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-        try
-        {
-            using var resp = await http.PostAsync("sendMessage", content, ct);
-            return resp.IsSuccessStatusCode;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private async Task dbSend(HttpClient http, string chatId, string text, string? keyboardJson, CancellationToken ct)
-        => await SendAsync(http, options.Value.BotToken!, chatId, text, keyboardJson, ct);
-
-    private static async Task AnswerCallbackAsync(HttpClient http, string token, string callbackId, string? toast, CancellationToken ct)
-    {
-        var payload = new JsonObject { ["callback_query_id"] = callbackId };
-        if (toast is not null)
-            payload["text"] = toast;
-        using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-        try
-        {
-            using var _ = await http.PostAsync("answerCallbackQuery", content, ct);
-        }
-        catch
-        {
-            /* non-critical */
-        }
-    }
-
-    private static string Inline(params (string Text, string Data)[] buttons)
-    {
-        var board = new JsonObject
-        {
-            ["inline_keyboard"] = new JsonArray(buttons
-                .Select(b => (JsonNode)new JsonObject { ["text"] = b.Text, ["callback_data"] = b.Data })
-                .ToArray()),
-        };
-        return board.ToJsonString();
-    }
-
-    // ---------------------------------------------------------------- telegram DTOs
-
-    private sealed class TgUpdate
-    {
-        [JsonPropertyName("update_id")] public long UpdateId { get; set; }
-        [JsonPropertyName("message")] public TgMessage? Message { get; set; }
-        [JsonPropertyName("callback_query")] public TgCallbackQuery? CallbackQuery { get; set; }
-    }
-
-    private sealed class TgMessage
-    {
-        [JsonPropertyName("message_id")] public long MessageId { get; set; }
-        [JsonPropertyName("chat")] public TgChat Chat { get; set; } = new();
-        [JsonPropertyName("text")] public string? Text { get; set; }
-    }
-
-    private sealed class TgChat
-    {
-        [JsonPropertyName("id")] public long Id { get; set; }
-        [JsonPropertyName("first_name")] public string? FirstName { get; set; }
-    }
-
-    private sealed class TgCallbackQuery
-    {
-        [JsonPropertyName("id")] public string Id { get; set; } = "";
-        [JsonPropertyName("from")] public TgFrom From { get; set; } = new();
-        [JsonPropertyName("message")] public TgMessage? Message { get; set; }
-        [JsonPropertyName("data")] public string? Data { get; set; }
-    }
-
-    private sealed class TgFrom
-    {
-        [JsonPropertyName("id")] public long Id { get; set; }
-    }
-
-    private static string? TryGetUsername(JsonDocument? me)
-    {
-        return me is not null
-               && me.RootElement.TryGetProperty("result", out var r)
-               && r.TryGetProperty("username", out var u)
-            ? u.GetString()
-            : null;
     }
 }
