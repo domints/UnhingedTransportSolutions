@@ -8,3 +8,4 @@ dist/
 .DS_Store
 local.env
 src/Uts.Api/wwwroot/
+packages-local/
