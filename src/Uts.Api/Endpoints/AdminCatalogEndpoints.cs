@@ -226,8 +226,10 @@ public static class AdminCatalogEndpoints
             if (row is null)
                 return Results.NotFound(new { error = "Trip not found." });
 
-            // Completed/cancelled trips release their shipments from planning.
-            if (row.Status != "planned")
+            // Cancelled trips release their shipments for re-assignment.
+            // Completed ones keep them — they stay attached for the arrival
+            // history until each parcel is individually delivered.
+            if (row.Status == "cancelled")
                 await conn.ExecuteAsync(
                     "UPDATE shipments SET trip_id = NULL, updated_at = now() WHERE trip_id = @id", new { id });
 
@@ -278,6 +280,14 @@ public static class AdminCatalogEndpoints
             }
 
             await tx.CommitAsync();
+
+            // Arriving marks the journey itself done — the trip is completed
+            // (only if still planned; never resurrect a cancelled trip). The
+            // final deliveries happen per-shipment afterwards.
+            if (to == ShipmentStatus.AtDestination)
+                await conn.ExecuteAsync(
+                    "UPDATE trips SET status = 'completed' WHERE id = @id AND status = 'planned'", new { id });
+
             return Results.Ok(new { from, to, updated, skipped });
         });
     }
