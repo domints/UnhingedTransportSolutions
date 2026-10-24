@@ -13,7 +13,21 @@ Public-facing tracking portal + admin panel, with a serious corporate face and a
 | Migrations| Numbered embedded SQL, applied at startup, tracked in `schema_versions` (DbUp-style, zero extra deps) |
 | Frontend  | Vue 3 + TypeScript + Vite (served as static files by the API) |
 | Auth      | Hand-rolled OIDC authorization-code + PKCE flow (Authentik) |
+| Telegram  | [Telegram.Bot](https://github.com/TelegramBots/Telegram.Bot) (typed Bot API client, long polling) |
 | Deploy    | Docker Compose (`app` + `db`)                            |
+
+### NuGet dependencies on a flaky-TLS machine
+
+TLS from `dotnet` can fail on this machine (`NU1301`), so NuGet sources are locked to a local
+offline feed in [`nuget.config`](nuget.config) pointing at `packages-local/`. To add or upgrade a
+package, download the `.nupkg` (plus any new transitive dependencies) with `curl` and drop it there:
+
+```bash
+curl -X GET 'https://api.nuget.org/v3/registration5-gz/telegram.bot/index.json' \
+     -H 'Accept-Encoding: gzip' | gunzip    # check available versions
+curl -o packages-local/telegram.bot.22.10.3.3.nupkg \
+     https://api.nuget.org/v3-flatcontainer/telegram.bot/22.10.3.3/telegram.bot.22.10.3.3.nupkg
+```
 
 ## Quick start (dev)
 
@@ -38,6 +52,9 @@ curl -c cookies.txt -X POST 'http://localhost:5000/api/dev/login?name=Dom'
 > ⚠️ On this machine, `dotnet`'s outgoing TLS sometimes fails ("bad certificate format" — a flaky
 > native runtime issue). If local `dotnet run` misbehaves, run the full stack via Docker — TLS
 > inside the Linux container works fine:
+
+> ℹ️ For **build/restore** failures from the same TLS flakiness, the repo pins NuGet to the local
+> offline feed (`nuget.config` → `packages-local/`) — see "NuGet dependencies" above.
 
 ```bash
 cd deploy && docker compose up -d --build
@@ -174,6 +191,4 @@ deploy/                 # docker-compose.yml + .env.example
 
 ## Future plans (already prepared in the schema)
 
-- **Telegram bot** — `clients.telegram_chat_id` is waiting; notifications hook into the
-  shipments' event stream trivially.
 - Deleting shipments is intentionally absent — history stays.
