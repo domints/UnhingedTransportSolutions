@@ -36,6 +36,10 @@ services:
       AUTH__BEHINDPROXY: ${AUTH_BEHIND_PROXY:-false}
       # DEV ONLY: fake admin login, never enable in production
       AUTH__DEVAUTH: ${AUTH_DEV_AUTH:-false}
+      # --- Telegram bot (omit token = module off) ---
+      TELEGRAM__BOTTOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM__SITEPUBLICURL: ${TELEGRAM_SITE_PUBLIC_URL:-}
+      TELEGRAM__COURIERCHATIDS: ${TELEGRAM_COURIER_CHAT_IDS:-}
     ports:
       # bound to loopback — TLS termination is the reverse proxy's job;
       # if your proxy runs as another container on the same network, you can
