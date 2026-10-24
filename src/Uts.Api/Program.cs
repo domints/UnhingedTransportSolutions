@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Options;
 using System.Threading.RateLimiting;
 using Uts.Api.Db;
 using Uts.Api.Endpoints;
@@ -25,6 +26,10 @@ builder.Services.AddSingleton<OidcService>();
 
 // Telegram module (inert without TELEGRAM__BOT_TOKEN)
 builder.Services.Configure<TelegramOptions>(cfg.GetSection(TelegramOptions.SectionName));
+// Consumers may inject the raw options type — make it resolvable
+// (Configure<> alone registers only IOptions<>).
+builder.Services.AddSingleton(sp =>
+    sp.GetRequiredService<IOptionsMonitor<TelegramOptions>>().CurrentValue);
 builder.Services.AddSingleton<BotState>();
 builder.Services.AddSingleton<TelegramNotifier>();
 builder.Services.AddSingleton<TripBulk>();
