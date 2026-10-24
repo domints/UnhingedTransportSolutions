@@ -15,7 +15,7 @@
             <td>
               <strong>{{ t.title }}</strong>
             </td>
-            <td class="mono">{{ t.originCode ?? '???' }} → {{ t.destinationCode ?? '???' }}</td>
+            <td class="mono">{{ routeStr(t) }}</td>
             <td class="small">{{ fmtDate(t.plannedDate) }}</td>
             <td><span class="badge" :class="'badge--' + tripBadge(t.status)">{{ tripStatusLabel(t.status) }}</span></td>
             <td><span class="chip">{{ t.shipmentCount }}</span></td>
@@ -107,6 +107,18 @@
         </div>
         <label>Planned date</label>
         <input v-model="editing.plannedDate" type="date" />
+        <label>Intermediate stops (deliveries en route)</label>
+        <div v-if="editing.stops.length" class="chip" style="display:flex; align-items:center; gap:.4rem; width:fit-content">
+          <template v-for="(s, i) in editing.stops" :key="s">
+            <span class="mono">{{ s }}</span>
+            <button type="button" style="padding:0 .3rem; border:none; background:none; cursor:pointer; font-size:1rem" @click="removeStop(i)">×</button>
+            <span v-if="i < editing.stops.length - 1">→</span>
+          </template>
+        </div>
+        <select @change="addStop($event)" :disabled="editing.stops.length >= 10">
+          <option value="">+ add stop…</option>
+          <option v-for="c in stopChoices" :key="c.code" :value="c.code">{{ c.code }} · {{ c.name }}</option>
+        </select>
         <label>Notes</label>
         <input v-model="editing.notes" />
         <div v-if="editing.id" class="field-row">
@@ -142,7 +154,7 @@ const cities = ref<City[]>([])
 const selected = ref<TripListItem | null>(null)
 const selectedShipments = ref<ShipmentListItem[]>([])
 
-const editing = ref<TripEditForm>({ id: undefined, title: '', originCode: '', destinationCode: '', plannedDate: '', status: 'planned', notes: '' })
+const editing = ref<TripEditForm>({ id: undefined, title: '', originCode: '', destinationCode: '', plannedDate: '', status: 'planned', notes: '', stops: [] })
 const showEdit = ref(false)
 const pickOpen = ref(false)
 const candidates = ref<ShipmentListItem[]>([])
@@ -158,9 +170,19 @@ interface TripEditForm {
   plannedDate: string
   status: string
   notes: string
+  stops: string[]
 }
 
 const activeCities = computed(() => cities.value.filter((c) => c.active))
+
+const stopChoices = computed(() =>
+  activeCities.value.filter(
+    (c) => c.code !== editing.value.originCode && c.code !== editing.value.destinationCode && !editing.value.stops.includes(c.code)))
+
+function routeStr(t: TripListItem) {
+  const chain = [t.originCode ?? '???', ...t.stops, t.destinationCode ?? '???']
+  return chain.join(' → ')
+}
 
 function tripBadge(status: string) {
   return status === 'planned' ? 'trip' : status === 'completed' ? 'delivered' : 'lost'
@@ -187,7 +209,7 @@ async function loadTripShipments() {
 }
 
 function openAdd() {
-  editing.value = { title: '', originCode: '', destinationCode: '', plannedDate: '', status: 'planned', notes: '' }
+  editing.value = { title: '', originCode: '', destinationCode: '', plannedDate: '', status: 'planned', notes: '', stops: [] }
   error.value = ''
   showEdit.value = true
 }
@@ -201,6 +223,7 @@ function openEdit(t: TripListItem) {
     plannedDate: t.plannedDate ?? '',
     status: t.status,
     notes: t.notes ?? '',
+    stops: [...t.stops],
   }
   error.value = ''
   showEdit.value = true
@@ -215,6 +238,7 @@ async function saveTrip() {
     plannedDate: e.plannedDate || null,
     status: e.status,
     notes: e.notes || null,
+    stops: e.stops,
   }
   try {
     if (e.id) await api.put<Trip>(`/api/admin/trips/${e.id}`, payload)
@@ -253,6 +277,16 @@ async function unassign(s: ShipmentListItem) {
   } catch (e) {
     pickError.value = e instanceof Error ? e.message : 'Unassign failed.'
   }
+}
+
+function addStop(e: Event) {
+  const code = (e.target as HTMLSelectElement).value
+  if (code && !editing.value.stops.includes(code)) editing.value.stops.push(code)
+  ;(e.target as HTMLSelectElement).value = ''
+}
+
+function removeStop(i: number) {
+  editing.value.stops.splice(i, 1)
 }
 
 async function bulkMark(to: 'in_transit' | 'at_destination') {

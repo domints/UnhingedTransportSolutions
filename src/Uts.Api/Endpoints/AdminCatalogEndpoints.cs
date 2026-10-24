@@ -154,7 +154,7 @@ public static class AdminCatalogEndpoints
             var filter = st is not null ? "WHERE t.status = @st" : "";
 
             await using var conn = await db.OpenAsync(ct);
-            var rows = await conn.QueryAsync<TripListItem>(
+            var rows = (await conn.QueryAsync<TripListItem>(
                 $"""
                 SELECT t.id               AS Id,
                        t.title            AS Title,
@@ -164,14 +164,31 @@ public static class AdminCatalogEndpoints
                        t.status           AS Status,
                        t.notes            AS Notes,
                        t.created_at       AS CreatedAt,
-                       (SELECT COUNT(*) FROM shipments s WHERE s.trip_id = t.id) AS ShipmentCount
+                       (SELECT COUNT(*) FROM shipments s WHERE s.trip_id = t.id) AS ShipmentCount,
+                       ARRAY[]::text[]    AS Stops
                 FROM trips t
                 {filter}
                 ORDER BY CASE t.status WHEN 'planned' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END,
                          t.planned_date ASC NULLS LAST,
                          t.created_at DESC
                 """,
-                new { st });
+                new { st })).AsList();
+
+            if (rows.Count > 0)
+            {
+                var tripIds = rows.Select(r => r.Id).ToArray();
+                var stopRows = await conn.QueryAsync<(long TripId, string CityCode)>(
+                    "SELECT trip_id, city_code FROM trip_stops WHERE trip_id = ANY(@ids) ORDER BY position",
+                    new { ids = tripIds });
+                var stopsByTrip = stopRows
+                    .GroupBy(s => s.TripId)
+                    .ToDictionary(g => g.Key, g => g.Select(s => s.CityCode).ToArray());
+
+                rows = rows
+                    .Select(r => r with { Stops = stopsByTrip.GetValueOrDefault(r.Id, Array.Empty<string>()) })
+                    .ToList();
+            }
+
             return Results.Ok(rows);
         });
 
@@ -182,6 +199,9 @@ public static class AdminCatalogEndpoints
                 return Bad("Trip title is required.");
 
             await using var conn = await db.OpenAsync(ct);
+            if (await ValidateStops(conn, req.OriginCode, req.DestinationCode, req.Stops) is { } stopErr)
+                return Bad(stopErr);
+
             var row = await conn.QuerySingleAsync<Trip>(
                 """
                 INSERT INTO trips (title, origin_code, destination_code, planned_date, notes)
@@ -190,6 +210,8 @@ public static class AdminCatalogEndpoints
                           planned_date AS PlannedDate, status, notes, created_at AS CreatedAt
                 """,
                 new { title, origin = req.OriginCode, destination = req.DestinationCode, planned = req.PlannedDate, notes = NullIfEmpty(req.Notes) });
+
+            await SaveStops(conn, row.Id, req.Stops);
             return Results.Created($"/api/admin/trips/{row.Id}", row);
         });
 
@@ -199,6 +221,17 @@ public static class AdminCatalogEndpoints
                 return Bad("Trip status must be 'planned', 'completed' or 'cancelled'.");
 
             await using var conn = await db.OpenAsync(ct);
+            var effectiveOrigin = req.OriginCode;
+            var effectiveDestination = req.DestinationCode;
+            var existing = await conn.QuerySingleOrDefaultAsync<(string? OriginCode, string? DestinationCode)>(
+                "SELECT origin_code, destination_code FROM trips WHERE id = @id", new { id });
+            if (existing.OriginCode is null)
+                return Results.NotFound(new { error = "Trip not found." });
+            effectiveOrigin = req.OriginCode ?? existing.OriginCode;
+            effectiveDestination = req.DestinationCode ?? existing.DestinationCode;
+            if (await ValidateStops(conn, effectiveOrigin, effectiveDestination, req.Stops) is { } stopErr)
+                return Bad(stopErr);
+
             var row = await conn.QuerySingleOrDefaultAsync<Trip>(
                 """
                 UPDATE trips
@@ -232,6 +265,10 @@ public static class AdminCatalogEndpoints
             if (row.Status == "cancelled")
                 await conn.ExecuteAsync(
                     "UPDATE shipments SET trip_id = NULL, updated_at = now() WHERE trip_id = @id", new { id });
+
+            // Route change: replace the stop list if one was sent.
+            if (row.Status != "cancelled")
+                await SaveStops(conn, row.Id, req.Stops);
 
             return Results.Ok(row);
         });
@@ -294,6 +331,63 @@ public static class AdminCatalogEndpoints
 
     private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
+    /// <summary>
+    /// Validates the intermediate stops of a trip: known city codes, not the
+    /// origin or destination themselves, no duplicates. Returns an error
+    /// message, or null when the list is usable. (Validation against the DB.)
+    /// </summary>
+    private static async Task<string?> ValidateStops(
+        Npgsql.NpgsqlConnection conn, string? origin, string? destination, List<string>? stops)
+    {
+        if (stops is null || stops.Count == 0)
+            return null;
+
+        var codes = stops
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim().ToUpperInvariant())
+            .Distinct()
+            .ToList();
+
+        if (codes.Count > 10)
+            return "A trip can have at most 10 stops.";
+
+        var known = (await conn.QueryAsync<string>("SELECT code FROM cities")).ToHashSet();
+        foreach (var c in codes.Where(c => !known.Contains(c)))
+            return $"Unknown stop city '{c}'.";
+
+        if (origin is not null && codes.Contains(origin))
+            return $"Stop '{origin}' is the trip's origin.";
+        if (destination is not null && codes.Contains(destination))
+            return $"Stop '{destination}' is the trip's destination.";
+
+        return null;
+    }
+
+    /// <summary>Replaces the stop list of a trip (positions = list order).
+    /// A null stops list means "leave stops untouched".</summary>
+    private static async Task SaveStops(Npgsql.NpgsqlConnection conn, long tripId, List<string>? stops)
+    {
+        if (stops is null)
+            return;
+
+        var codes = stops
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim().ToUpperInvariant())
+            .Distinct()
+            .ToList();
+
+        await using var tx = await conn.BeginTransactionAsync();
+        await conn.ExecuteAsync(
+            "DELETE FROM trip_stops WHERE trip_id = @tripId", new { tripId }, tx);
+        for (var i = 0; i < codes.Count; i++)
+        {
+            await conn.ExecuteAsync(
+                "INSERT INTO trip_stops (trip_id, city_code, position) VALUES (@tripId, @code, @pos)",
+                new { tripId, code = codes[i], pos = i }, tx);
+        }
+        await tx.CommitAsync();
+    }
+
     private static IResult Bad(string message) => Results.Json(new { error = message },
         statusCode: StatusCodes.Status400BadRequest);
 
@@ -304,7 +398,8 @@ public static class AdminCatalogEndpoints
     public sealed record UpdateCityRequest(string? Name, bool? Active);
 
     public sealed record UpsertTripRequest(
-        string? Title, string? OriginCode, string? DestinationCode, DateTime? PlannedDate, string? Status, string? Notes);
+        string? Title, string? OriginCode, string? DestinationCode, DateTime? PlannedDate,
+        string? Status, string? Notes, List<string>? Stops);
 
     public sealed record TripBulkStatusRequest(string? Status);
 }

@@ -226,8 +226,8 @@ public static class AdminShipmentsEndpoints
                 return Results.Ok(removed);
             }
 
-            var trip = await conn.QuerySingleOrDefaultAsync<(string Title, DateTime? PlannedDate, string Status, string? DestinationCode)>(
-                "SELECT title, planned_date, status, destination_code FROM trips WHERE id = @tid",
+            var trip = await conn.QuerySingleOrDefaultAsync<(string Title, DateTime? PlannedDate, string Status, string? OriginCode, string? DestinationCode)>(
+                "SELECT title, planned_date, status, origin_code, destination_code FROM trips WHERE id = @tid",
                 new { tid = req.TripId });
             if (trip.Title is null)
                 return Results.NotFound(new { error = "Trip not found." });
@@ -236,9 +236,19 @@ public static class AdminShipmentsEndpoints
                     new { error = $"Trip '{trip.Title}' is {trip.Status} — shipments can only join planned trips." },
                     statusCode: StatusCodes.Status409Conflict);
             if (trip.DestinationCode is not null && trip.DestinationCode != current.DestinationCode)
-                return Results.Json(
-                    new { error = $"Trip destination ({trip.DestinationCode}) does not match shipment destination ({current.DestinationCode})." },
-                    statusCode: StatusCodes.Status409Conflict);
+            {
+                var route = (await conn.QueryAsync<string>(
+                        "SELECT city_code FROM trip_stops WHERE trip_id = @tid ORDER BY position",
+                        new { tid = req.TripId })).AsList();
+                if (!route.Contains(current.DestinationCode))
+                    return Results.Json(
+                        new
+                        {
+                            error = $"Trip route ({trip.OriginCode ?? "?"} → {string.Join(" → ", route)} → {trip.DestinationCode}) " +
+                                    $"does not include shipment destination ({current.DestinationCode})."
+                        },
+                        statusCode: StatusCodes.Status409Conflict);
+            }
 
             var when = trip.PlannedDate is { } d ? $" (planned {d:yyyy-MM-dd})" : "";
             var title = trip.Title;

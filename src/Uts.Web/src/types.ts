@@ -30,6 +30,7 @@ export interface Trip {
 
 export interface TripListItem extends Trip {
   shipmentCount: number
+  stops: string[]
 }
 
 export interface TrackEvent {
