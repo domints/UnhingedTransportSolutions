@@ -1,11 +1,11 @@
 <template>
   <main class="container">
     <section class="hero">
-      <span class="hero__eyebrow">Slightly irregular logistics</span>
+      <span class="hero__eyebrow">Now with 0 (zero) depots</span>
       <h1>Unhinged Transport Solutions</h1>
       <p class="hero__tag">
-        Someone is already travelling between your two cities anyway.<br />
-        Your parcel may as well ride along.
+        Your parcel doesn't need a warehouse.<br />
+        It needs someone brave enough to be going your way anyway.
       </p>
 
       <form class="trackbox" @submit.prevent="track">
@@ -18,15 +18,18 @@
         />
         <button class="btn btn--accent" type="submit">Track</button>
       </form>
+      <p class="muted small" style="margin-top:.4rem">
+        The number above isn't yours. Yours is the one the courier scribbled down, probably.
+      </p>
       <p v-if="error" class="muted small" style="margin-top:.6rem">{{ error }}</p>
     </section>
 
     <section class="card" style="max-width: 720px; margin-left: auto; margin-right: auto">
       <h2>How does this work?</h2>
       <p>
-        A real courier company, minus the terminals, the fleet and – most days – the schedule.
-        <strong>Unhinged Transport Solutions</strong> moves parcels along routes they would
-        take anyway: trains, cars of UTS™ personnel, and goodwill.
+        Most carriers move your parcel from A to B. We move it the way <em>nature intended</em>:
+        inside a backpack of someone riding the same train you'd expect it to ride.
+        Distance: covered. Timing: metaphysical.
       </p>
       <p class="muted">
         Every shipment gets an official-looking number and a 6-digit access code.
@@ -36,7 +39,8 @@
     </section>
 
     <footer class="muted small" style="text-align:center">
-      UTS™ is a licensed imaginary carrier. Complaints route to the nearest ticket inspector. ·
+      Your parcel exists and does not exist until observed by you. Fitting for a courier who only
+      claims to be at the post office until checked. ·
       <a href="/admin">Staff area</a>
     </footer>
   </main>
