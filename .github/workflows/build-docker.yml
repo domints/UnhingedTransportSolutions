@@ -52,3 +52,8 @@ jobs:
           provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Notify webhook
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          curl -fsS -X POST ${{ secrets.WEBHOOK_URL }} \
+          -H "Authorization: Bearer ${{ secrets.WEBHOOK_SECRET }}" 
