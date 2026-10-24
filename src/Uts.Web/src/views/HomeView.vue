@@ -4,15 +4,15 @@
       <span class="hero__eyebrow">Slightly irregular logistics</span>
       <h1>Unhinged Transport Solutions</h1>
       <p class="hero__tag">
-        Your parcel was going to travel between cities anyway.<br />
-        Might as well carry yours.
+        Someone is already travelling between your two cities anyway.<br />
+        Your parcel may as well ride along.
       </p>
 
       <form class="trackbox" @submit.prevent="track">
         <input
           v-model="number"
           class="mono"
-          placeholder="UTS2137000012WRO"
+          :placeholder="exampleNumber"
           spellcheck="false"
           autocomplete="off"
         />
@@ -30,7 +30,8 @@
       </p>
       <p class="muted">
         Every shipment gets an official-looking number and a 6-digit access code.
-        Enter both below to see who sent what, where, and when it is planned to depart.
+        Type the number above; once you're on the tracking page, unlock the details
+        — sender, contents, planned trip — with the access code from your courier.
       </p>
     </section>
 
@@ -48,6 +49,10 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 const number = ref('')
 const error = ref('')
+
+// Random 6-digit serial on every page load — otherwise the example number
+// looks like a real, existing shipment someone might try.
+const exampleNumber = `UTS2137${Math.floor(100000 + Math.random() * 900000)}WRO`
 
 function track() {
   const num = number.value.replace(/\s/g, '').toUpperCase()
