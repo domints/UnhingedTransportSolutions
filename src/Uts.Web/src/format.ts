@@ -4,6 +4,7 @@ export const STATUS_LABELS: Record<string, string> = {
   registered: 'Registered',
   picked_up: 'Picked up',
   in_transit: 'In transit',
+  at_destination: 'At destination',
   delivered: 'Delivered',
   cancelled: 'Cancelled',
   lost: 'Lost',
@@ -12,7 +13,8 @@ export const STATUS_LABELS: Record<string, string> = {
 export const TRANSITIONS: Record<string, string[]> = {
   registered: ['picked_up', 'cancelled'],
   picked_up: ['in_transit', 'cancelled', 'lost'],
-  in_transit: ['delivered', 'lost'],
+  in_transit: ['at_destination', 'delivered', 'lost'],
+  at_destination: ['delivered', 'lost'],
   delivered: [],
   cancelled: [],
   lost: [],

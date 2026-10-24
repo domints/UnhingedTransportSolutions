@@ -3,34 +3,37 @@ namespace Uts.Api.Domain;
 /// <summary>Courier status flow + the allowed transition graph.</summary>
 public static class ShipmentStatus
 {
-    public const string Registered = "registered";
-    public const string PickedUp   = "picked_up";
-    public const string InTransit  = "in_transit";
-    public const string Delivered  = "delivered";
-    public const string Cancelled  = "cancelled";
-    public const string Lost       = "lost";
+    public const string Registered     = "registered";
+    public const string PickedUp       = "picked_up";
+    public const string InTransit      = "in_transit";
+    public const string AtDestination  = "at_destination";
+    public const string Delivered      = "delivered";
+    public const string Cancelled      = "cancelled";
+    public const string Lost           = "lost";
 
     public static readonly string[] All =
-        [Registered, PickedUp, InTransit, Delivered, Cancelled, Lost];
+        [Registered, PickedUp, InTransit, AtDestination, Delivered, Cancelled, Lost];
 
     public static readonly Dictionary<string, string> Labels = new()
     {
-        [Registered] = "Registered",
-        [PickedUp]   = "Picked up",
-        [InTransit]  = "In transit",
-        [Delivered]  = "Delivered",
-        [Cancelled]  = "Cancelled",
-        [Lost]       = "Lost",
+        [Registered]     = "Registered",
+        [PickedUp]       = "Picked up",
+        [InTransit]      = "In transit",
+        [AtDestination]  = "At destination",
+        [Delivered]      = "Delivered",
+        [Cancelled]      = "Cancelled",
+        [Lost]           = "Lost",
     };
 
     public static readonly Dictionary<string, string[]> Transitions = new()
     {
-        [Registered] = [PickedUp, Cancelled],
-        [PickedUp]   = [InTransit, Cancelled, Lost],
-        [InTransit]  = [Delivered, Lost],
-        [Delivered]  = [],
-        [Cancelled]  = [],
-        [Lost]       = [],
+        [Registered]    = [PickedUp, Cancelled],
+        [PickedUp]      = [InTransit, Cancelled, Lost],
+        [InTransit]     = [AtDestination, Delivered, Lost],
+        [AtDestination] = [Delivered, Lost],
+        [Delivered]     = [],
+        [Cancelled]     = [],
+        [Lost]          = [],
     };
 
     public static bool CanTransition(string from, string to)

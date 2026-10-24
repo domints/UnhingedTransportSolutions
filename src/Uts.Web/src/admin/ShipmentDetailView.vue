@@ -133,6 +133,7 @@ const plannedTrips = computed(() => trips.value.filter((t) => t.status === 'plan
 const DESTINATION_STYLES: Record<string, string> = {
   picked_up: 'btn--primary',
   in_transit: 'btn--primary',
+  at_destination: 'btn--primary',
   delivered: '',
   cancelled: 'btn--danger',
   lost: 'btn--danger',

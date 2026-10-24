@@ -189,6 +189,7 @@ label {
 .badge--registered { background: var(--neutral-bg); color: var(--neutral); }
 .badge--picked_up { background: var(--blue-bg); color: var(--blue); }
 .badge--in_transit { background: var(--warn-bg); color: var(--warn); }
+.badge--at_destination { background: var(--blue-bg); color: var(--blue); }
 .badge--delivered { background: var(--ok-bg); color: var(--ok); }
 .badge--cancelled { background: var(--bad-bg); color: var(--bad); }
 .badge--lost { background: var(--bad-bg); color: var(--bad); }
