@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Dapper;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -16,6 +17,8 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
     // `dotnet path/to/Uts.Api.dll` from elsewhere serves 404 for static files.
     ContentRootPath = AppContext.BaseDirectory,
 });
+// Postgres text[] → string[] (Dapper refuses arrays without a handler).
+SqlMapper.AddTypeHandler(new StringArrayTypeHandler());
 var cfg = builder.Configuration;
 
 builder.Services.AddSingleton<Database>();
