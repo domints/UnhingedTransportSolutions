@@ -31,6 +31,9 @@
         <h2 style="margin:0">Haul for “{{ selected.title }}”</h2>
         <button class="btn" @click="selected = null">Close</button>
       </div>
+      <p v-if="selected.shipmentCount" class="muted small" style="margin:.3rem 0 .8rem">
+        Packlist — make sure every parcel below is physically packed before you leave.
+      </p>
       <table v-if="selectedShipments.length" class="table">
         <thead>
           <tr><th>Number</th><th>Recipient</th><th>Contents</th><th>Status</th><th></th></tr>
@@ -47,7 +50,19 @@
       </table>
       <p v-else class="empty">No shipments assigned to this trip yet.</p>
 
-      <button class="btn" style="margin-top:1rem" @click="pickOpen = true; showCandidates()">+ Add shipment to trip</button>
+      <p v-if="bulkResult" class="callout callout--ok small" style="margin-top:.8rem">
+        {{ bulkResult }}
+      </p>
+
+      <div class="toolbar" style="margin-top:1rem">
+        <button class="btn btn--primary" :disabled="!selectedShipments.length" @click="bulkMark('in_transit')">
+          🚆 Leaving — mark all in transit
+        </button>
+        <button class="btn btn--primary" :disabled="!selectedShipments.length" @click="bulkMark('at_destination')">
+          📍 Arrived — mark all at destination
+        </button>
+        <button class="btn" style="margin-left:auto" @click="pickOpen = true; showCandidates()">+ Add shipment to trip</button>
+      </div>
     </div>
 
     <!-- pick modal -->
@@ -118,7 +133,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { api } from '@/api'
 import type { City, ShipmentListItem, Trip, TripListItem } from '@/types'
-import { fmtDate, tripStatusLabel } from '@/format'
+import { STATUS_LABELS, fmtDate, tripStatusLabel } from '@/format'
 import Modal from '@/components/Modal.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 
@@ -133,6 +148,7 @@ const pickOpen = ref(false)
 const candidates = ref<ShipmentListItem[]>([])
 const pickError = ref('')
 const error = ref('')
+const bulkResult = ref('')
 
 interface TripEditForm {
   id?: number
@@ -161,6 +177,7 @@ async function select(t: TripListItem) {
     return
   }
   selected.value = t
+  bulkResult.value = ''
   await loadTripShipments()
 }
 
@@ -235,6 +252,25 @@ async function unassign(s: ShipmentListItem) {
     await reload()
   } catch (e) {
     pickError.value = e instanceof Error ? e.message : 'Unassign failed.'
+  }
+}
+
+async function bulkMark(to: 'in_transit' | 'at_destination') {
+  if (!selected.value) return
+  bulkResult.value = ''
+  try {
+    const r = await api.post<{ updated: string[]; skipped: { trackingNumber: string; status: string }[] }>(
+      `/api/admin/trips/${selected.value.id}/shipments/status`, { status: to })
+    const skipped = r.skipped.map((s) => `${s.trackingNumber} (${STATUS_LABELS[s.status] ?? s.status})`)
+    const parts: string[] = []
+    parts.push(`${r.updated.length} shipment${r.updated.length === 1 ? '' : 's'} marked ${STATUS_LABELS[to]}.`)
+    if (skipped.length) parts.push(`Skipped — cannot transition yet: ${skipped.join(', ')}.`)
+    bulkResult.value = parts.join(' ')
+    await loadTripShipments()
+    await reload()
+  } catch (e) {
+    bulkResult.value = ''
+    error.value = e instanceof Error ? e.message : 'Bulk update failed.'
   }
 }
 

@@ -233,6 +233,53 @@ public static class AdminCatalogEndpoints
 
             return Results.Ok(row);
         });
+
+        // Packlist bulk action: "leaving" marks everything picked_up → in_transit,
+        // "arrived" marks everything in_transit → at_destination. Shipments whose
+        // current status cannot legally transition are skipped and reported back.
+        g.MapPost("/{id:long}/shipments/status", async (long id, TripBulkStatusRequest req, Database db, CancellationToken ct) =>
+        {
+            var to = req.Status?.Trim() ?? "";
+            if (to is not (ShipmentStatus.InTransit or ShipmentStatus.AtDestination))
+                return Bad("Bulk status supports only 'in_transit' and 'at_destination'.");
+
+            var from = to == ShipmentStatus.InTransit ? ShipmentStatus.PickedUp : ShipmentStatus.InTransit;
+
+            await using var conn = await db.OpenAsync(ct);
+            var trip = await conn.QuerySingleOrDefaultAsync<string?>(
+                "SELECT title FROM trips WHERE id = @id", new { id });
+            if (trip is null)
+                return Results.NotFound(new { error = "Trip not found." });
+
+            var assigned = (await conn.QueryAsync<(long Id, string TrackingNumber, string Status)>(
+                "SELECT id, tracking_number, status FROM shipments WHERE trip_id = @id", new { id })).AsList();
+
+            await using var tx = await conn.BeginTransactionAsync();
+            var updated = new List<string>();
+            var skipped = new List<object>();
+
+            foreach (var s in assigned)
+            {
+                if (s.Status != from || !ShipmentStatus.CanTransition(s.Status, to))
+                {
+                    skipped.Add(new { trackingNumber = s.TrackingNumber, status = s.Status });
+                    continue;
+                }
+
+                await conn.ExecuteAsync(
+                    """
+                    UPDATE shipments SET status = @to, updated_at = now() WHERE id = @sid;
+                    INSERT INTO shipment_events (shipment_id, type, message)
+                    VALUES (@sid, 'status', @msg);
+                    """,
+                    new { sid = s.Id, to, msg = $"Status updated: {ShipmentStatus.Label(to).ToUpperInvariant()}" },
+                    tx);
+                updated.Add(s.TrackingNumber);
+            }
+
+            await tx.CommitAsync();
+            return Results.Ok(new { from, to, updated, skipped });
+        });
     }
 
     private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
@@ -248,4 +295,6 @@ public static class AdminCatalogEndpoints
 
     public sealed record UpsertTripRequest(
         string? Title, string? OriginCode, string? DestinationCode, DateTime? PlannedDate, string? Status, string? Notes);
+
+    public sealed record TripBulkStatusRequest(string? Status);
 }
