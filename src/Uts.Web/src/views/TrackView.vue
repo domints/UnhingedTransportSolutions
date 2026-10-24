@@ -93,6 +93,17 @@
         </dl>
       </div>
 
+      <!-- telegram notifications claim (recipient without a bound chat) -->
+      <div v-if="info.telegramClaimUrl" class="card">
+        <h2>Powiadomienia na Telegramie</h2>
+        <p class="muted small" style="margin:.3rem 0 .8rem">
+          Chcesz dostawać powiadomienia o tej i kolejnych paczkach wprost na Telegram?
+        </p>
+        <a class="btn btn--primary" :href="info.telegramClaimUrl" target="_blank" rel="noopener">
+          🔔 Aktywuj powiadomienia
+        </a>
+      </div>
+
       <!-- timeline -->
       <div class="card">
         <h2>Tracking history</h2>

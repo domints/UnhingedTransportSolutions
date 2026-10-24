@@ -69,6 +69,7 @@ export interface TrackInfo {
   notes?: string | null
   tripTitle?: string | null
   tripPlannedDate?: string | null
+  telegramClaimUrl?: string | null
 }
 
 export interface ShipmentListItem {

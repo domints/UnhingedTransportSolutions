@@ -23,9 +23,28 @@ builder.Services.AddSingleton<PinService>();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<OidcService>();
 
+// Telegram module (inert without TELEGRAM__BOT_TOKEN)
+builder.Services.Configure<TelegramOptions>(cfg.GetSection(TelegramOptions.SectionName));
+builder.Services.AddSingleton<BotState>();
+builder.Services.AddSingleton<TelegramNotifier>();
+builder.Services.AddSingleton<TripBulk>();
+builder.Services.AddHostedService<TelegramBot>();
+
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    // Someone is hammering the unlock endpoint — surface it to the courier's Telegram.
+    options.OnRejected = async (context, token) =>
+    {
+        var number = context.HttpContext.Request.RouteValues["number"]?.ToString() ?? "a tracking number";
+        var notifier = context.HttpContext.RequestServices.GetRequiredService<TelegramNotifier>();
+        try
+        {
+            await notifier.EnqueueAdminAsync($"🚨 Too many wrong access-code attempts for {number}. Possible brute-force.");
+        }
+        catch { /* alerts must never break the response */ }
+        await Task.CompletedTask;
+    };
     options.AddPolicy("pin-unlock", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
             $"{httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown"}|{httpContext.Request.RouteValues["number"]}",

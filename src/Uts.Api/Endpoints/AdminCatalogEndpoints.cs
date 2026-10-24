@@ -2,6 +2,7 @@ using Dapper;
 using Uts.Api.Db;
 using Uts.Api.Http;
 using Uts.Api.Domain;
+using Uts.Api.Services;
 
 namespace Uts.Api.Endpoints;
 
@@ -83,6 +84,24 @@ public static class AdminCatalogEndpoints
                     notes = NullIfEmpty(req.Notes),
                 });
             return row is null ? Results.NotFound(new { error = "Client not found." }) : Results.Ok(row);
+        });
+
+        // Generates a one-week claim code for this client's Telegram binding:
+        // /start <code> in the bot (or the t.me deep link) connects the chat.
+        g.MapPost("/{id:long}/claim", async (long id, Database db, BotState bot, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            if (!await conn.ExecuteScalarAsync<bool>(
+                    "SELECT EXISTS (SELECT 1 FROM clients WHERE id = @id)", new { id }))
+                return Results.NotFound(new { error = "Client not found." });
+
+            var code = TelegramCodes.NewClaimCode();
+            await conn.ExecuteAsync(
+                "UPDATE clients SET telegram_claim_code = @code, telegram_claim_expires = now() + INTERVAL '7 days' WHERE id = @id",
+                new { id, code });
+
+            var url = bot.BotUsername is null ? null : $"https://t.me/{bot.BotUsername}?start={code}";
+            return Results.Ok(new { code, url });
         });
     }
 
@@ -282,58 +301,21 @@ public static class AdminCatalogEndpoints
         });
 
         // Packlist bulk action: "leaving" marks everything picked_up → in_transit,
-        // "arrived" marks everything in_transit → at_destination. Shipments whose
-        // current status cannot legally transition are skipped and reported back.
-        g.MapPost("/{id:long}/shipments/status", async (long id, TripBulkStatusRequest req, Database db, CancellationToken ct) =>
+        // "arrived" marks everything in_transit → at_destination. The logic is
+        // shared with the Telegram bot: TripBulk also handles timeline events,
+        // trip completion and recipient Telegram digests.
+        g.MapPost("/{id:long}/shipments/status", async (long id, TripBulkStatusRequest req, Database db, TripBulk bulk, CancellationToken ct) =>
         {
             var to = req.Status?.Trim() ?? "";
             if (to is not (ShipmentStatus.InTransit or ShipmentStatus.AtDestination))
                 return Bad("Bulk status supports only 'in_transit' and 'at_destination'.");
 
-            var from = to == ShipmentStatus.InTransit ? ShipmentStatus.PickedUp : ShipmentStatus.InTransit;
-
             await using var conn = await db.OpenAsync(ct);
-            var trip = await conn.QuerySingleOrDefaultAsync<string?>(
-                "SELECT title FROM trips WHERE id = @id", new { id });
-            if (trip is null)
+            var result = await bulk.MarkAllAsync(conn, id, to);
+            if (result is null)
                 return Results.NotFound(new { error = "Trip not found." });
 
-            var assigned = (await conn.QueryAsync<(long Id, string TrackingNumber, string Status)>(
-                "SELECT id, tracking_number, status FROM shipments WHERE trip_id = @id", new { id })).AsList();
-
-            await using var tx = await conn.BeginTransactionAsync();
-            var updated = new List<string>();
-            var skipped = new List<object>();
-
-            foreach (var s in assigned)
-            {
-                if (s.Status != from || !ShipmentStatus.CanTransition(s.Status, to))
-                {
-                    skipped.Add(new { trackingNumber = s.TrackingNumber, status = s.Status });
-                    continue;
-                }
-
-                await conn.ExecuteAsync(
-                    """
-                    UPDATE shipments SET status = @to, updated_at = now() WHERE id = @sid;
-                    INSERT INTO shipment_events (shipment_id, type, message)
-                    VALUES (@sid, 'status', @msg);
-                    """,
-                    new { sid = s.Id, to, msg = $"Status updated: {ShipmentStatus.Label(to).ToUpperInvariant()}" },
-                    tx);
-                updated.Add(s.TrackingNumber);
-            }
-
-            await tx.CommitAsync();
-
-            // Arriving marks the journey itself done — the trip is completed
-            // (only if still planned; never resurrect a cancelled trip). The
-            // final deliveries happen per-shipment afterwards.
-            if (to == ShipmentStatus.AtDestination)
-                await conn.ExecuteAsync(
-                    "UPDATE trips SET status = 'completed' WHERE id = @id AND status = 'planned'", new { id });
-
-            return Results.Ok(new { from, to, updated, skipped });
+            return Results.Ok(new { from = result.From, to = result.To, updated = result.Updated, skipped = result.Skipped });
         });
 
         // Spawn one (or the mirrored return) trip from a prior-saved route template.

@@ -57,7 +57,7 @@ public static class TrackEndpoints
         });
 
         api.MapPost("/{number}/unlock", async
-                (string number, UnlockPasswordRequest req, Database db, CancellationToken ct) =>
+                (string number, UnlockPasswordRequest req, Database db, BotState bot, CancellationToken ct) =>
         {
             var num = Normalize(number);
             await using var conn = await db.OpenAsync(ct);
@@ -74,6 +74,7 @@ public static class TrackEndpoints
                        s.created_at         AS CreatedAt,
                        s.delivered_at       AS DeliveredAt,
                        sender.name          AS SenderName,
+                       recipient.id         AS RecipientId,
                        recipient.name       AS RecipientName,
                        s.description        AS Description,
                        s.transport_mode     AS TransportMode,
@@ -107,10 +108,33 @@ public static class TrackEndpoints
                 """,
                 new { id = row.Id })).ToArray();
 
+            // Telegram claim hint: a recipient without a bound chat gets a
+            // one-click claim link (t.me/<bot>?start=<code>, 7-day code).
+            string? claimUrl = null;
+            if (bot.BotUsername is not null)
+            {
+                var rec = await conn.QuerySingleOrDefaultAsync<(string? ChatId, string? PendingCode, DateTime? PendingExpires)>(
+                    "SELECT telegram_chat_id::text, telegram_claim_code, telegram_claim_expires FROM clients WHERE id = @rid",
+                    new { rid = row.RecipientId });
+                if (string.IsNullOrWhiteSpace(rec.ChatId))
+                {
+                    var code = rec.PendingCode;
+                    if (string.IsNullOrWhiteSpace(code) || rec.PendingExpires is not { } explr || explr <= DateTime.UtcNow)
+                    {
+                        code = TelegramCodes.NewClaimCode();
+                        await conn.ExecuteAsync(
+                            "UPDATE clients SET telegram_claim_code = @code, telegram_claim_expires = now() + INTERVAL '7 days' WHERE id = @rid",
+                            new { rid = row.RecipientId, code });
+                    }
+                    claimUrl = $"https://t.me/{bot.BotUsername}?start={code}";
+                }
+            }
+
             return Results.Ok(new TrackFull(
                 row.Number, row.Status, row.OriginCode, row.OriginName, row.DestinationCode, row.DestinationName,
                 row.CreatedAt, row.DeliveredAt, row.SenderName, row.RecipientName, row.Description,
-                row.TransportMode, row.Notes, row.TripTitle, row.TripPlannedDate, UnlockRequired: false, events));
+                row.TransportMode, row.Notes, row.TripTitle, row.TripPlannedDate, claimUrl,
+                UnlockRequired: false, events));
         })
         .RequireRateLimiting("pin-unlock");
     }
@@ -146,6 +170,7 @@ public static class TrackEndpoints
         DateTime CreatedAt,
         DateTime? DeliveredAt,
         string SenderName,
+        long RecipientId,
         string RecipientName,
         string Description,
         string TransportMode,

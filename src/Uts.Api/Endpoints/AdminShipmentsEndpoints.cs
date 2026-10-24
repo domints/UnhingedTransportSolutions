@@ -89,7 +89,7 @@ public static class AdminShipmentsEndpoints
         });
 
         g.MapPost("/", async (CreateShipmentRequest req, Database db, NumberService numbers, PinService pins,
-            CancellationToken ct) =>
+            TelegramNotifier telegram, CancellationToken ct) =>
         {
             var description = req.Description?.Trim();
             if (string.IsNullOrEmpty(description))
@@ -153,7 +153,11 @@ public static class AdminShipmentsEndpoints
                     // no shipment contents here — this event shows on the public tracking page
                     msg = $"Shipment registered: {origin} → {destination}",
                 }, tx);
+
+            //Recipient push (out-of-session, still transactional) + courier alert.
+            await telegram.EnqueueShipmentStatusAsync(conn, tx, created.Id, "registered");
             await tx.CommitAsync();
+            _ = telegram.EnqueueAdminAsync($"📦 New shipment: {number} ({origin} → {destination})");
 
             var detail = await LoadDetail(conn, created.Id, ct);
             return Results.Created($"/api/admin/shipments/{created.Id}", new { pin, shipment = detail });
@@ -166,7 +170,7 @@ public static class AdminShipmentsEndpoints
             return detail is null ? Results.NotFound(new { error = "Shipment not found." }) : Results.Ok(detail);
         });
 
-        g.MapPost("/{id:long}/status", async (long id, StatusChangeRequest req, Database db, CancellationToken ct) =>
+        g.MapPost("/{id:long}/status", async (long id, StatusChangeRequest req, Database db, TelegramNotifier telegram, CancellationToken ct) =>
         {
             var to = req.Status?.Trim() ?? "";
             if (!ShipmentStatus.All.Contains(to))
@@ -196,6 +200,7 @@ public static class AdminShipmentsEndpoints
             await conn.ExecuteAsync(
                 "INSERT INTO shipment_events (shipment_id, type, message) VALUES (@id, 'status', @msg)",
                 new { id, msg = $"Status updated: {ShipmentStatus.Label(to).ToUpperInvariant()}" }, tx);
+            await telegram.EnqueueShipmentStatusAsync(conn, tx, id, to);
             await tx.CommitAsync();
 
             var detail = await LoadDetail(conn, id, ct);
@@ -281,7 +286,7 @@ public static class AdminShipmentsEndpoints
             return Results.Ok(detail);
         });
 
-        g.MapPost("/{id:long}/pin", async (long id, Database db, PinService pins, CancellationToken ct) =>
+        g.MapPost("/{id:long}/pin", async (long id, Database db, PinService pins, TelegramNotifier telegram, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             if (!await conn.ExecuteScalarAsync<bool>(
@@ -292,6 +297,9 @@ public static class AdminShipmentsEndpoints
             await conn.ExecuteAsync(
                 "UPDATE shipments SET pin = @pin, updated_at = now() WHERE id = @id",
                 new { pin, id });
+            var number = await conn.ExecuteScalarAsync<string>(
+                "SELECT tracking_number FROM shipments WHERE id = @id", new { id });
+            _ = telegram.EnqueueAdminAsync($"🔑 Access code regenerated for {number}.");
             return Results.Ok(new { pin });
         });
     }

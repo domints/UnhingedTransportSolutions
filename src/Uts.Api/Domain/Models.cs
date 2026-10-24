@@ -128,6 +128,7 @@ public record TrackFull(
     string? Notes,
     string? TripTitle,
     DateTime? TripPlannedDate,
+    string? TelegramClaimUrl,
     bool UnlockRequired,
     TrackEvent[] Events);
 

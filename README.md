@@ -66,6 +66,23 @@ docker compose up -d --build
 | `AUTH_ADMIN_GROUP`     | Authentik group whose members may use the admin panel (default `uts-admins`) |
 | `AUTH_BEHIND_PROXY`    | `true` when behind a reverse proxy (X-Forwarded-* honoured)  |
 | `AUTH_DEV_AUTH`        | DEV ONLY fake login endpoint — **never enable publicly**     |
+| `TELEGRAM__BOT_TOKEN`  | BotFather token; omit to keep the bot module off             |
+| `TELEGRAM__SITE__PUBLIC_URL` | Public base URL — tracking buttons in bot messages     |
+| `TELEGRAM__COURIER_CHAT_IDS` | Comma-separated chat IDs allowed to run courier commands (`/leaving`, `/arrived`, `/deliver`, `/packlist`) |
+
+## Telegram bot
+
+Recipients get Polish push notifications about their parcels (status changes, trip departures/
+arrivals); the courier drives the packlist straight from the chat. Message delivery goes through
+an outbox table (survives restarts, retried with backoff).
+
+Setup:
+1. Create a bot with [@BotFather](https://t.me/BotFather), copy the token into `TELEGRAM__BOT_TOKEN`.
+2. Message the bot once and open `https://api.telegram.org/bot<TOKEN>/getUpdates` to read your
+   `chat.id` — put it into `TELEGRAM__COURIER_CHAT_IDS` to unlock courier commands.
+3. Clients bind their chat two ways: the admin panel (**Clients → TG claim**) or the public
+   tracking page after PIN unlock (shows a one-click claim link when the recipient is unbound).
+4. Recipients can mute/unmute anytime with `/notifications` in the chat.
 
 ## Authentik setup
 

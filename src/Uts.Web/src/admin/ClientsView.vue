@@ -19,7 +19,10 @@
               <span v-else class="muted" title="The future notification bot needs this">not linked yet</span>
             </td>
             <td class="small">{{ c.notes || '—' }}</td>
-            <td><button class="btn btn--sm" @click="openEdit(c)">Edit</button></td>
+            <td style="white-space:nowrap">
+              <button class="btn btn--sm" @click="generateClaim(c)">TG claim</button>
+              <button class="btn btn--sm" @click="openEdit(c)">Edit</button>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -43,6 +46,21 @@
         </div>
       </form>
     </Modal>
+
+    <!-- telegram claim code -->
+    <Modal :open="claim !== null" title="Telegram claim" @close="claim = null">
+      <p class="small">Claim code for <strong>{{ claim?.name }}</strong> (valid 7 days, single use):</p>
+      <p class="mono copynum"><strong>{{ claim?.code }}</strong></p>
+      <template v-if="claim?.url">
+        <p class="small" style="margin-top:.8rem">One-click link (opens the bot with the claim pre-typed):</p>
+        <p class="mono small">{{ claim.url }}</p>
+        <a class="btn btn--primary" :href="claim.url" target="_blank" rel="noopener">Open in Telegram</a>
+      </template>
+      <p v-else class="muted small" style="margin-top:.8rem">
+        Bot username not known yet (module disabled or bot not started) — send the code to the recipient;
+        they must message the bot <span class="mono">/start &lt;code&gt;</span> themselves.
+      </p>
+    </Modal>
   </main>
 </template>
 
@@ -56,6 +74,7 @@ const clients = ref<Client[]>([])
 const show = ref(false)
 const editing = ref<ClientEditForm>({ id: undefined, name: '', contact: null, telegramChatId: null, notes: null })
 const error = ref('')
+const claim = ref<{ name: string; code: string; url: string | null } | null>(null)
 
 interface ClientEditForm {
   id?: number
@@ -67,6 +86,16 @@ interface ClientEditForm {
 
 async function reload() {
   clients.value = await api.get<Client[]>('/api/admin/clients')
+}
+
+async function generateClaim(c: Client) {
+  error.value = ''
+  try {
+    const r = await api.post<{ code: string; url: string | null }>(`/api/admin/clients/${c.id}/claim`)
+    claim.value = { name: c.name, code: r.code, url: r.url }
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Claim code generation failed.'
+  }
 }
 
 function openAdd() {
