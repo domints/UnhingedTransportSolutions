@@ -29,6 +29,11 @@ builder.Services.AddSingleton<OidcService>();
 
 // Telegram module (inert without TELEGRAM__BOT_TOKEN)
 builder.Services.Configure<TelegramOptions>(cfg.GetSection(TelegramOptions.SectionName));
+// Background services crash → keep the app alive (default would stop the
+// whole host). The bot is an optional module; everything else has no
+// hosted services, so this only ever protects against a bot blowup.
+builder.Services.Configure<HostOptions>(o =>
+    o.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore);
 // Consumers may inject the raw options type — make it resolvable
 // (Configure<> alone registers only IOptions<>).
 builder.Services.AddSingleton(sp =>

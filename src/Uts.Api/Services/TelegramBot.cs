@@ -34,11 +34,26 @@ public sealed class TelegramBot(
         }
 
         var http = httpFactory.CreateClient();
-        http.BaseAddress = new Uri(ApiBase);
+        // Token goes into the base address, NOT the request path: the token
+        // contains a colon, so a string like "bot8966223705:AA…/getMe" is parsed
+        // as an absolute URI with scheme "bot8966223705" and HttpClient throws
+        // «The 'bot…' scheme is not supported». Relative paths ("getMe") resolve
+        // against the base — no colon parsing involved.
+        http.BaseAddress = new Uri($"{ApiBase}bot{opts.BotToken}/");
         http.Timeout = TimeSpan.FromSeconds(70); // long polling needs patience
 
-        var me = await CallAsync(http, opts.BotToken, "getMe", null, stoppingToken);
-        var username = me is null ? null : TryGetUsername(me);
+        string? username;
+        try
+        {
+            username = TryGetUsername(await CallAsync(http, "getMe", null, stoppingToken));
+        }
+        catch (Exception ex)
+        {
+            // A flaky network / Telegram hiccup at boot must not take the whole
+            // app down — the bot is an optional module.
+            logger.LogWarning(ex, "Telegram: getMe failed — module disabled for this run.");
+            return;
+        }
         if (string.IsNullOrEmpty(username))
         {
             logger.LogError("Telegram: getMe failed — module disabled. Check the bot token.");
@@ -449,7 +464,7 @@ public sealed class TelegramBot(
 
     private async Task<List<TgUpdate>> GetUpdatesAsync(HttpClient http, string token, long offset, CancellationToken ct)
     {
-        var resp = await http.GetAsync($"bot{token}/getUpdates?offset={offset}&timeout=25", ct);
+        var resp = await http.GetAsync($"getUpdates?offset={offset}&timeout=25", ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(body);
         return doc.RootElement.TryGetProperty("result", out var result)
@@ -457,14 +472,14 @@ public sealed class TelegramBot(
             : [];
     }
 
-    private async Task<JsonDocument?> CallAsync(HttpClient http, string token, string method, object? body, CancellationToken ct)
+    private async Task<JsonDocument?> CallAsync(HttpClient http, string method, object? body, CancellationToken ct)
     {
         using var content = body is null
             ? null
             : new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         using var resp = body is null
-            ? await http.GetAsync($"bot{token}/{method}", ct)
-            : await http.PostAsync($"bot{token}/{method}", content!, ct);
+            ? await http.GetAsync(method, ct)
+            : await http.PostAsync(method, content!, ct);
         var raw = await resp.Content.ReadAsStringAsync(ct);
         try
         {
@@ -484,7 +499,7 @@ public sealed class TelegramBot(
         using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
         try
         {
-            using var resp = await http.PostAsync($"bot{token}/sendMessage", content, ct);
+            using var resp = await http.PostAsync("sendMessage", content, ct);
             return resp.IsSuccessStatusCode;
         }
         catch
@@ -504,7 +519,7 @@ public sealed class TelegramBot(
         using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
         try
         {
-            using var _ = await http.PostAsync($"bot{token}/answerCallbackQuery", content, ct);
+            using var _ = await http.PostAsync("answerCallbackQuery", content, ct);
         }
         catch
         {
@@ -558,9 +573,10 @@ public sealed class TelegramBot(
         [JsonPropertyName("id")] public long Id { get; set; }
     }
 
-    private static string? TryGetUsername(JsonDocument me)
+    private static string? TryGetUsername(JsonDocument? me)
     {
-        return me.RootElement.TryGetProperty("result", out var r)
+        return me is not null
+               && me.RootElement.TryGetProperty("result", out var r)
                && r.TryGetProperty("username", out var u)
             ? u.GetString()
             : null;
