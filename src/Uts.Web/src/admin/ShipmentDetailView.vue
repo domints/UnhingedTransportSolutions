@@ -93,7 +93,12 @@
           <strong>{{ s.pin }}</strong>
           <button type="button" @click="copy(s.pin)">copy</button>
         </p>
-        <button class="btn" @click="regeneratePin">Generate new access code</button>
+        <div class="btnrow">
+          <button class="btn" @click="copyLink">
+            {{ linkCopied ? 'Tracking link copied ✓' : 'Copy tracking link' }}
+          </button>
+          <button class="btn" @click="regeneratePin">Generate new access code</button>
+        </div>
       </div>
 
       <div class="card">
@@ -209,6 +214,20 @@ async function addNote() {
 
 function copy(text: string) {
   navigator.clipboard?.writeText(text)
+}
+
+// Public tracking URL — derived from wherever the admin panel is being
+// browsed (localhost in dev, LAN/public host in prod), no extra config.
+const trackLink = computed(() =>
+  s.value ? `${window.location.origin}/track/${s.value.trackingNumber}` : '')
+const linkCopied = ref(false)
+let linkTimer: ReturnType<typeof setTimeout> | undefined
+
+async function copyLink() {
+  navigator.clipboard?.writeText(trackLink.value)
+  linkCopied.value = true
+  clearTimeout(linkTimer)
+  linkTimer = setTimeout(() => { linkCopied.value = false }, 2000)
 }
 
 onMounted(load)
