@@ -133,8 +133,8 @@ public static class TrackEndpoints
         string? OriginCode,
         string DestinationCode,
         string DestinationName,
-        DateTimeOffset CreatedAt,
-        DateTimeOffset? DeliveredAt);
+        DateTime CreatedAt,
+        DateTime? DeliveredAt);
 
     private sealed record TrackUnlockRow(
         long Id,
@@ -144,8 +144,8 @@ public static class TrackEndpoints
         string? OriginName,
         string DestinationCode,
         string DestinationName,
-        DateTimeOffset CreatedAt,
-        DateTimeOffset? DeliveredAt,
+        DateTime CreatedAt,
+        DateTime? DeliveredAt,
         string SenderName,
         string RecipientName,
         string Description,

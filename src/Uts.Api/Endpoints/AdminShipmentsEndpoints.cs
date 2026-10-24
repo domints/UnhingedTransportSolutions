@@ -123,7 +123,7 @@ public static class AdminShipmentsEndpoints
 
             await using var tx = await conn.BeginTransactionAsync();
             var number = await numbers.NextAsync(conn, destination);
-            var created = await conn.QuerySingleAsync<(long Id, DateTimeOffset CreatedAt)>(
+            var created = await conn.QuerySingleAsync<(long Id, DateTime CreatedAt)>(
                 """
                 INSERT INTO shipments
                     (tracking_number, sender_id, recipient_id, origin_code, destination_code,
@@ -379,7 +379,7 @@ public static class AdminShipmentsEndpoints
         string? TripTitle,
         DateTime? TripPlannedDate,
         string? TripStatus,
-        DateTimeOffset CreatedAt,
-        DateTimeOffset UpdatedAt,
-        DateTimeOffset? DeliveredAt);
+        DateTime CreatedAt,
+        DateTime UpdatedAt,
+        DateTime? DeliveredAt);
 }

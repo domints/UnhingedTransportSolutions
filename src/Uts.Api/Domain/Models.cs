@@ -6,7 +6,7 @@ public record Client(
     string? Contact,
     string? TelegramChatId,
     string? Notes,
-    DateTimeOffset CreatedAt);
+    DateTime CreatedAt);
 
 public record City(
     string Code,
@@ -21,7 +21,7 @@ public record Trip(
     DateTime? PlannedDate,
     string Status,
     string? Notes,
-    DateTimeOffset CreatedAt);
+    DateTime CreatedAt);
 
 public record TripListItem(
     long Id,
@@ -31,7 +31,7 @@ public record TripListItem(
     DateTime? PlannedDate,
     string Status,
     string? Notes,
-    DateTimeOffset CreatedAt,
+    DateTime CreatedAt,
     int ShipmentCount);
 
 public record ShipmentEvent(
@@ -40,7 +40,7 @@ public record ShipmentEvent(
     string Type,
     string Message,
     string Source,
-    DateTimeOffset CreatedAt);
+    DateTime CreatedAt);
 
 /// <summary>Row shown in the admin shipments list.</summary>
 public record ShipmentListItem(
@@ -57,7 +57,7 @@ public record ShipmentListItem(
     long? TripId,
     string? TripTitle,
     DateTime? TripPlannedDate,
-    DateTimeOffset CreatedAt);
+    DateTime CreatedAt);
 
 /// <summary>Full shipment as returned to the admin panel.</summary>
 public record ShipmentDetail(
@@ -79,9 +79,9 @@ public record ShipmentDetail(
     string? TripTitle,
     DateTime? TripPlannedDate,
     string? TripStatus,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt,
-    DateTimeOffset? DeliveredAt,
+    DateTime CreatedAt,
+    DateTime UpdatedAt,
+    DateTime? DeliveredAt,
     ShipmentEvent[] Events);
 
 /// <summary>Public (PIN-locked) tracking payload.</summary>
@@ -91,8 +91,8 @@ public record TrackPublic(
     string? OriginCode,
     string DestinationCode,
     string DestinationName,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset? DeliveredAt,
+    DateTime CreatedAt,
+    DateTime? DeliveredAt,
     bool UnlockRequired,
     TrackEvent[] Events);
 
@@ -104,8 +104,8 @@ public record TrackFull(
     string? OriginName,
     string DestinationCode,
     string DestinationName,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset? DeliveredAt,
+    DateTime CreatedAt,
+    DateTime? DeliveredAt,
     string SenderName,
     string RecipientName,
     string Description,
@@ -119,4 +119,4 @@ public record TrackFull(
 public record TrackEvent(
     string Type,
     string Message,
-    DateTimeOffset CreatedAt);
+    DateTime CreatedAt);
