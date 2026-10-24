@@ -21,7 +21,8 @@ public record Trip(
     DateTime? PlannedDate,
     string Status,
     string? Notes,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    string TransportMode);
 
 public record TripListItem(
     long Id,
@@ -33,7 +34,19 @@ public record TripListItem(
     string? Notes,
     DateTime CreatedAt,
     long ShipmentCount,
-    string[] Stops);
+    string[] Stops,
+    string TransportMode);
+
+/// <summary>Recurring-route preset so regular round-trips can be spawned
+/// (optionally with the mirrored return leg) with one click.</summary>
+public record TripTemplate(
+    long Id,
+    string Title,
+    string? OriginCode,
+    string? DestinationCode,
+    string[] Stops,
+    string TransportMode,
+    DateTime CreatedAt);
 
 public record ShipmentEvent(
     long Id,

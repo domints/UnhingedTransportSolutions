@@ -26,11 +26,22 @@ export interface Trip {
   status: TripStatus
   notes: string | null
   createdAt: string
+  transportMode: string
 }
 
 export interface TripListItem extends Trip {
   shipmentCount: number
   stops: string[]
+}
+
+export interface TripTemplate {
+  id: number
+  title: string
+  originCode: string | null
+  destinationCode: string | null
+  stops: string[]
+  transportMode: string
+  createdAt: string
 }
 
 export interface TrackEvent {
