@@ -38,7 +38,7 @@ public static class TrackEndpoints
                 JOIN cities c ON c.code = s.destination_code
                 WHERE s.tracking_number = @num
                 """,
-                new { num }, tx);
+                new { num });
             if (sh is null)
                 return NotFound();
 
@@ -49,7 +49,7 @@ public static class TrackEndpoints
                 WHERE shipment_id = @id AND type <> 'trip'
                 ORDER BY created_at DESC
                 """,
-                new { id = sh.Id }, tx)).ToArray();
+                new { id = sh.Id })).ToArray();
 
             return Results.Ok(new TrackPublic(
                 sh.Number, sh.Status, sh.OriginCode, sh.DestinationCode, sh.DestinationName,

@@ -20,4 +20,12 @@
     <EmbeddedResource Include="Migrations/**/*.sql" />
   </ItemGroup>
 
+  <!-- dotnet.exe-run bin/ output: bring wwwroot along so ContentRoot (bin) can serve the SPA -->
+  <Target Name="CopyWwwrootToOutput" AfterTargets="Build" Condition="Exists('$(MSBuildProjectDirectory)/wwwroot')">
+    <ItemGroup>
+      <WwwRootFiles Include="$(MSBuildProjectDirectory)/wwwroot/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WwwRootFiles)" DestinationFiles="@(WwwRootFiles->'$(OutputPath)wwwroot/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

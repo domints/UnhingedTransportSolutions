@@ -6,3 +6,5 @@ dist/
 .env
 *.swp
 .DS_Store
+local.env
+src/Uts.Api/wwwroot/

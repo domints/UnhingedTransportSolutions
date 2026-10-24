@@ -12,9 +12,9 @@ export default defineConfig({
   server: {
     proxy: {
       // API + auth redirects go to the ASP.NET backend during development
-      '/api': 'http://localhost:5000',
-      '/auth': 'http://localhost:5000',
-      '/signin': 'http://localhost:5000',
+      '/api': 'http://localhost:5080',
+      '/auth': 'http://localhost:5080',
+      '/signin': 'http://localhost:5080',
     },
   },
   build: {

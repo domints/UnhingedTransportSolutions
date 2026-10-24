@@ -8,7 +8,13 @@ using Uts.Api.Db;
 using Uts.Api.Endpoints;
 using Uts.Api.Services;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    // Content root = the app's own directory, not the caller's CWD — otherwise
+    // `dotnet path/to/Uts.Api.dll` from elsewhere serves 404 for static files.
+    ContentRootPath = AppContext.BaseDirectory,
+});
 var cfg = builder.Configuration;
 
 builder.Services.AddSingleton<Database>();
@@ -49,7 +55,11 @@ builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
+Console.WriteLine($"[{DateTime.Now:T}] checkpoints: built");
+
 await DbMigrator.RunAsync(app.Services);
+
+Console.WriteLine($"[{DateTime.Now:T}] checkpoints: migrated");
 
 if (cfg.GetValue<bool>("Auth:BehindProxy"))
 {
@@ -87,6 +97,22 @@ if (cfg.GetValue<bool>("Auth:DevAuth"))
         await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme,
             new ClaimsPrincipal(identity));
         return Results.Ok(new { ok = true, name = who });
+    });
+
+    // Browser-friendly dev login (GET with side effect is fine — this endpoint
+    // only exists when DevAuth is explicitly enabled).
+    app.MapGet("/dev/login", async (HttpContext http, string? name) =>
+    {
+        var who = string.IsNullOrWhiteSpace(name) ? "dev-admin" : name.Trim();
+        var claims = new List<Claim>
+        {
+            new("preferred_username", who),
+            new(devGroupsClaim, devAdminGroup),
+        };
+        var identity = new ClaimsIdentity(claims, "dev");
+        await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme,
+            new ClaimsPrincipal(identity));
+        return Results.Redirect("/admin");
     });
 }
 

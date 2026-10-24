@@ -3,7 +3,7 @@
   "profiles": {
     "uts": {
       "commandName": "Project",
-      "applicationUrl": "http://localhost:5000",
+      "applicationUrl": "http://localhost:5080",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
         "AUTH__DEVAUTH": "true"
