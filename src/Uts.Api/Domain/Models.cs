@@ -32,7 +32,7 @@ public record TripListItem(
     string Status,
     string? Notes,
     DateTime CreatedAt,
-    int ShipmentCount);
+    long ShipmentCount);
 
 public record ShipmentEvent(
     long Id,
