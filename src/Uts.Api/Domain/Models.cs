@@ -1,0 +1,122 @@
+namespace Uts.Api.Domain;
+
+public record Client(
+    long Id,
+    string Name,
+    string? Contact,
+    string? TelegramChatId,
+    string? Notes,
+    DateTimeOffset CreatedAt);
+
+public record City(
+    string Code,
+    string Name,
+    bool Active);
+
+public record Trip(
+    long Id,
+    string Title,
+    string? OriginCode,
+    string? DestinationCode,
+    DateTime? PlannedDate,
+    string Status,
+    string? Notes,
+    DateTimeOffset CreatedAt);
+
+public record TripListItem(
+    long Id,
+    string Title,
+    string? OriginCode,
+    string? DestinationCode,
+    DateTime? PlannedDate,
+    string Status,
+    string? Notes,
+    DateTimeOffset CreatedAt,
+    int ShipmentCount);
+
+public record ShipmentEvent(
+    long Id,
+    long ShipmentId,
+    string Type,
+    string Message,
+    string Source,
+    DateTimeOffset CreatedAt);
+
+/// <summary>Row shown in the admin shipments list.</summary>
+public record ShipmentListItem(
+    long Id,
+    string TrackingNumber,
+    string Status,
+    string TransportMode,
+    string? OriginCode,
+    string DestinationCode,
+    string DestinationName,
+    string SenderName,
+    string RecipientName,
+    string Description,
+    long? TripId,
+    string? TripTitle,
+    DateTime? TripPlannedDate,
+    DateTimeOffset CreatedAt);
+
+/// <summary>Full shipment as returned to the admin panel.</summary>
+public record ShipmentDetail(
+    long Id,
+    string TrackingNumber,
+    string Status,
+    long SenderId,
+    string SenderName,
+    long RecipientId,
+    string RecipientName,
+    string? OriginCode,
+    string? OriginName,
+    string DestinationCode,
+    string DestinationName,
+    string Description,
+    string TransportMode,
+    string? Notes,
+    long? TripId,
+    string? TripTitle,
+    DateTime? TripPlannedDate,
+    string? TripStatus,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? DeliveredAt,
+    ShipmentEvent[] Events);
+
+/// <summary>Public (PIN-locked) tracking payload.</summary>
+public record TrackPublic(
+    string Number,
+    string Status,
+    string? OriginCode,
+    string DestinationCode,
+    string DestinationName,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? DeliveredAt,
+    bool UnlockRequired,
+    TrackEvent[] Events);
+
+/// <summary>Tracking payload after a correct access code was supplied.</summary>
+public record TrackFull(
+    string Number,
+    string Status,
+    string? OriginCode,
+    string? OriginName,
+    string DestinationCode,
+    string DestinationName,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? DeliveredAt,
+    string SenderName,
+    string RecipientName,
+    string Description,
+    string TransportMode,
+    string? Notes,
+    string? TripTitle,
+    DateTime? TripPlannedDate,
+    bool UnlockRequired,
+    TrackEvent[] Events);
+
+public record TrackEvent(
+    string Type,
+    string Message,
+    DateTimeOffset CreatedAt);

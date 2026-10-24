@@ -1,0 +1,49 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: uts
+      POSTGRES_USER: uts
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uts -d uts"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    # On the homelab you can skip building entirely:
+    #   UTS_IMAGE=ghcr.io/<owner>/<repo>:latest docker compose up -d
+    # (the GitHub Action publishes images to GHCR on every push to main)
+    image: ${UTS_IMAGE:-uts:local}
+    build:
+      context: ..
+      dockerfile: src/Uts.Api/Dockerfile
+    restart: unless-stopped
+    environment:
+      ConnectionStrings__Database: "Host=db;Port=5432;Database=uts;Username=uts;Password=${POSTGRES_PASSWORD}"
+      # --- OIDC (Authentik) ---
+      OIDC__AUTHORITY: ${OIDC_AUTHORITY:-}
+      OIDC__CLIENTID: ${OIDC_CLIENT_ID:-}
+      OIDC__CLIENTSECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC__SCOPES: ${OIDC_SCOPES:-openid profile email groups}
+      OIDC__GROUPSCLAIM: ${OIDC_GROUPS_CLAIM:-groups}
+      # --- admin ---
+      AUTH__ADMINGROUP: ${AUTH_ADMIN_GROUP:-uts-admins}
+      AUTH__BEHINDPROXY: ${AUTH_BEHIND_PROXY:-false}
+      # DEV ONLY: fake admin login, never enable in production
+      AUTH__DEVAUTH: ${AUTH_DEV_AUTH:-false}
+    ports:
+      # bound to loopback — TLS termination is the reverse proxy's job;
+      # if your proxy runs as another container on the same network, you can
+      # remove this mapping entirely and reach `app:8080` internally.
+      - "127.0.0.1:${UTS_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  dbdata:

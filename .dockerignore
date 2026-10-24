@@ -1,0 +1,7 @@
+bin/
+obj/
+node_modules/
+.git
+*.md
+packages-local/
+packages-local/*.nuspec
