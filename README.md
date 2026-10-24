@@ -91,8 +91,9 @@ The sequence is a Postgres `sequence`, so numbers are unique across restarts.
 ### Access codes (PIN)
 Every shipment gets a random 6-digit code. The public tracking page shows status, route and a
 generic timeline without it; entering the code unlocks sender, recipient, contents, transport mode,
-planned trip and internal notes. Codes are stored hashed (SHA-256 + salt) and unlock attempts are
-rate-limited (5 per 10 minutes per IP+number). Admins can regenerate a code anytime.
+planned trip and internal notes. Codes are stored in plaintext (they're shared openly with the
+recipient anyway) and unlock attempts are rate-limited (5 per 10 minutes per IP+number).
+Admins can regenerate a code anytime.
 
 ### Status flow
 `Registered → Picked up → In transit → Delivered`, with `Cancelled` / `Lost` as side exits.

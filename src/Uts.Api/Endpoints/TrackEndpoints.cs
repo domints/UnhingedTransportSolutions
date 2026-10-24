@@ -57,7 +57,7 @@ public static class TrackEndpoints
         });
 
         api.MapPost("/{number}/unlock", async
-                (string number, UnlockPasswordRequest req, Database db, PinService pins, CancellationToken ct) =>
+                (string number, UnlockPasswordRequest req, Database db, CancellationToken ct) =>
         {
             var num = Normalize(number);
             await using var conn = await db.OpenAsync(ct);
@@ -78,8 +78,7 @@ public static class TrackEndpoints
                        s.description        AS Description,
                        s.transport_mode     AS TransportMode,
                        s.notes              AS Notes,
-                       s.pin_salt           AS PinSalt,
-                       s.pin_hash           AS PinHash,
+                       s.pin                AS Pin,
                        t.title              AS TripTitle,
                        t.planned_date       AS TripPlannedDate
                 FROM shipments s
@@ -94,7 +93,7 @@ public static class TrackEndpoints
             if (row is null)
                 return NotFound();
 
-            if (string.IsNullOrWhiteSpace(req.Pin) || !pins.Verify(req.Pin.Trim(), row.PinSalt, row.PinHash))
+            if (string.IsNullOrWhiteSpace(req.Pin) || req.Pin.Trim() != row.Pin)
                 return Results.Json(
                     new { error = "Wrong access code." },
                     statusCode: StatusCodes.Status400BadRequest);
@@ -151,8 +150,7 @@ public static class TrackEndpoints
         string Description,
         string TransportMode,
         string? Notes,
-        string PinSalt,
-        string PinHash,
+        string Pin,
         string? TripTitle,
         DateTime? TripPlannedDate);
 }

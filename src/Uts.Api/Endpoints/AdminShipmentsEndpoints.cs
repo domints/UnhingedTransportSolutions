@@ -119,7 +119,6 @@ public static class AdminShipmentsEndpoints
                 return Bad("Recipient not found.");
 
             var pin = pins.Generate();
-            var (salt, hash) = pins.Hash(pin);
 
             await using var tx = await conn.BeginTransactionAsync();
             var number = await numbers.NextAsync(conn, destination);
@@ -127,10 +126,10 @@ public static class AdminShipmentsEndpoints
                 """
                 INSERT INTO shipments
                     (tracking_number, sender_id, recipient_id, origin_code, destination_code,
-                     description, transport_mode, status, pin_salt, pin_hash, notes)
+                     description, transport_mode, status, pin, notes)
                 VALUES
                     (@number, @senderId, @recipientId, @origin, @destination,
-                     @description, @mode, 'registered', @salt, @hash, @notes)
+                     @description, @mode, 'registered', @pin, @notes)
                 RETURNING id, created_at
                 """,
                 new
@@ -142,8 +141,7 @@ public static class AdminShipmentsEndpoints
                     destination,
                     description,
                     mode,
-                    salt,
-                    hash,
+                    pin,
                     notes = string.IsNullOrWhiteSpace(req.Notes) ? null : req.Notes.Trim(),
                 },
                 tx);
@@ -280,10 +278,9 @@ public static class AdminShipmentsEndpoints
                 return Results.NotFound(new { error = "Shipment not found." });
 
             var pin = pins.Generate();
-            var (salt, hash) = pins.Hash(pin);
             await conn.ExecuteAsync(
-                "UPDATE shipments SET pin_salt = @salt, pin_hash = @hash, updated_at = now() WHERE id = @id",
-                new { salt, hash, id });
+                "UPDATE shipments SET pin = @pin, updated_at = now() WHERE id = @id",
+                new { pin, id });
             return Results.Ok(new { pin });
         });
     }
