@@ -91,6 +91,7 @@ export interface ShipmentDetail {
   description: string
   transportMode: string
   notes: string | null
+  pin: string
   tripId: number | null
   tripTitle: string | null
   tripPlannedDate: string | null

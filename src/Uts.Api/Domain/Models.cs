@@ -75,6 +75,7 @@ public record ShipmentDetail(
     string Description,
     string TransportMode,
     string? Notes,
+    string Pin,
     long? TripId,
     string? TripTitle,
     DateTime? TripPlannedDate,

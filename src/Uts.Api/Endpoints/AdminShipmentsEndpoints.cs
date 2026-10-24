@@ -303,6 +303,7 @@ public static class AdminShipmentsEndpoints
                    s.description        AS Description,
                    s.transport_mode     AS TransportMode,
                    s.notes              AS Notes,
+                   s.pin                AS Pin,
                    s.trip_id            AS TripId,
                    t.title              AS TripTitle,
                    t.planned_date       AS TripPlannedDate,
@@ -338,7 +339,7 @@ public static class AdminShipmentsEndpoints
         return new ShipmentDetail(
             s.Id, s.TrackingNumber, s.Status, s.SenderId, s.SenderName, s.RecipientId, s.RecipientName,
             s.OriginCode, s.OriginName, s.DestinationCode, s.DestinationName, s.Description, s.TransportMode,
-            s.Notes, s.TripId, s.TripTitle, s.TripPlannedDate, s.TripStatus, s.CreatedAt, s.UpdatedAt,
+            s.Notes, s.Pin, s.TripId, s.TripTitle, s.TripPlannedDate, s.TripStatus, s.CreatedAt, s.UpdatedAt,
             s.DeliveredAt, events);
     }
 
@@ -372,6 +373,7 @@ public static class AdminShipmentsEndpoints
         string Description,
         string TransportMode,
         string? Notes,
+        string Pin,
         long? TripId,
         string? TripTitle,
         DateTime? TripPlannedDate,

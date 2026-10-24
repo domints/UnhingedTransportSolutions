@@ -7,14 +7,6 @@
     <template v-else>
       <nav style="margin-bottom:1rem"><RouterLink to="/admin">← All shipments</RouterLink></nav>
 
-      <div class="callout callout--ok" v-if="regeneratedPin">
-        <strong>New access code (shown once):</strong>
-        <span class="mono copynum" style="margin-left:.4rem">
-          <strong>{{ regeneratedPin }}</strong>
-          <button type="button" @click="copy(regeneratedPin)">copy</button>
-        </span>
-      </div>
-
       <div class="card">
         <div class="toolbar">
           <div>
@@ -96,7 +88,11 @@
 
       <div class="card">
         <h2>Access code</h2>
-        <p class="muted small">Six-digit code unlocking full details on the tracking page. Stored only as a hash; regenerate to get a new one.</p>
+        <p class="muted small">Six-digit code unlocking full details on the tracking page. Regenerate to get a new one.</p>
+        <p class="mono copynum" style="font-size:1.2rem">
+          <strong>{{ s.pin }}</strong>
+          <button type="button" @click="copy(s.pin)">copy</button>
+        </p>
         <button class="btn" @click="regeneratePin">Generate new access code</button>
       </div>
 
@@ -130,7 +126,6 @@ const loading = ref(true)
 
 const statusError = ref('')
 const note = ref('')
-const regeneratedPin = ref('')
 const tripChoice = ref(0)
 
 const plannedTrips = computed(() => trips.value.filter((t) => t.status === 'planned'))
@@ -195,7 +190,9 @@ async function removeTrip() {
 }
 
 async function regeneratePin() {
-  regeneratedPin.value = await api.post<{ pin: string }>(`/api/admin/shipments/${id}/pin`).then((r) => r.pin)
+  await api.post<{ pin: string }>(`/api/admin/shipments/${id}/pin`)
+  // refetch so the access code card shows the new value immediately
+  await load()
 }
 
 async function addNote() {
