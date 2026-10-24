@@ -19,14 +19,26 @@ Public-facing tracking portal + admin panel, with a serious corporate face and a
 ### NuGet dependencies on a flaky-TLS machine
 
 TLS from `dotnet` can fail on this machine (`NU1301`), so NuGet sources are locked to a local
-offline feed in [`nuget.config`](nuget.config) pointing at `packages-local/`. To add or upgrade a
-package, download the `.nupkg` (plus any new transitive dependencies) with `curl` and drop it there:
+offline feed in [`nuget.config`](nuget.config) pointing at `packages-local/` (gitignored, not in
+the repo). **After a fresh clone the folder is empty and restore fails** — populate it via curl:
 
 ```bash
-curl -X GET 'https://api.nuget.org/v3/registration5-gz/telegram.bot/index.json' \
-     -H 'Accept-Encoding: gzip' | gunzip    # check available versions
-curl -o packages-local/telegram.bot.22.10.3.3.nupkg \
-     https://api.nuget.org/v3-flatcontainer/telegram.bot/22.10.3.3/telegram.bot.22.10.3.3.nupkg
+while read id ver; do
+  curl -s -o "packages-local/$id.$ver.nupkg" \
+    "https://api.nuget.org/v3-flatcontainer/$id/$ver/$id.$ver.nupkg"
+done <<EOF
+dapper 2.1.66
+microsoft.bcl.asyncinterfaces 9.0.1
+microsoft.extensions.dependencyinjection.abstractions 8.0.2
+microsoft.extensions.logging.abstractions 8.0.2
+microsoft.extensions.options 8.0.0
+npgsql 9.0.5
+system.reflection.emit.ilgeneration 4.7.0
+system.reflection.emit.lightweight 4.7.0
+system.threading.tasks.extensions 4.5.4
+system.text.json 8.0.5
+telegram.bot 22.10.3.3
+EOF
 ```
 
 ## Quick start (dev)
