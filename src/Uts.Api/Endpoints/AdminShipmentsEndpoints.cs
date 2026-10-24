@@ -150,7 +150,8 @@ public static class AdminShipmentsEndpoints
                 new
                 {
                     id = created.Id,
-                    msg = $"Shipment registered: {origin} → {destination} • {Truncate(description, 80)}",
+                    // no shipment contents here — this event shows on the public tracking page
+                    msg = $"Shipment registered: {origin} → {destination}",
                 }, tx);
             await tx.CommitAsync();
 
@@ -342,8 +343,6 @@ public static class AdminShipmentsEndpoints
             s.Notes, s.Pin, s.TripId, s.TripTitle, s.TripPlannedDate, s.TripStatus, s.CreatedAt, s.UpdatedAt,
             s.DeliveredAt, events);
     }
-
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
 
     private static IResult Bad(string message) => Results.Json(new { error = message },
         statusCode: StatusCodes.Status400BadRequest);
