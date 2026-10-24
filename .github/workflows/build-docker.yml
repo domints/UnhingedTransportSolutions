@@ -2,7 +2,7 @@ name: build-docker
 
 on:
   push:
-    branches: [main]
+    branches: [main, master, trunk]
     tags: ['v*']
   workflow_dispatch:
 
@@ -47,5 +47,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # no provenance+SBOM attestations — they appear as a phantom
+          # unknown/unknown platform entry under the tag
+          provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
