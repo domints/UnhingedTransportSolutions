@@ -1,5 +1,5 @@
 <template>
-  <main class="container">
+  <main class="container container--wide">
     <div class="toolbar">
       <h1 style="font-size:1.4rem; color:var(--navy); margin:0">Shipments</h1>
       <button class="btn btn--primary" @click="openCreate">+ New shipment</button>
@@ -53,9 +53,11 @@
         </thead>
         <tbody>
           <tr v-for="s in shipments" :key="s.id" @click="go(s)">
-            <td class="mono copynum">
-              {{ s.trackingNumber }}
-              <button type="button" @click.stop="copy(s.trackingNumber)">copy</button>
+            <td class="mono">
+              <span class="copynum">
+                {{ s.trackingNumber }}
+                <button type="button" @click.stop="copy(s.trackingNumber)">copy</button>
+              </span>
             </td>
             <td class="mono">{{ s.originCode ?? '???' }} → {{ s.destinationCode }}</td>
             <td>{{ s.senderName }}</td>

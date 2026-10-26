@@ -49,6 +49,11 @@ a { color: var(--navy-3); }
   padding: 1.5rem 1.25rem 4rem;
 }
 
+/* Full-width variant for dense data tables (shipments list). */
+.container--wide {
+  max-width: none;
+}
+
 .card {
   background: var(--card);
   border: 1px solid var(--line);
