@@ -49,12 +49,15 @@ public static class AdminIdentityEndpoints
 
         // Couriers = clients bound to a login identity. Feeds the trip-form
         // "courier" select — only real mapped humans should appear there.
+        // NOTE: project to anonymous objects — System.Text.Json ignores
+        // value-tuple fields by default, which would serialize these rows
+        // as [{}, {}, …].
         g.MapGet("/couriers", async (Database db, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            var rows = await conn.QueryAsync<(long Id, string Name)>(
-                "SELECT id, name FROM clients WHERE auth_sub IS NOT NULL ORDER BY name");
-            return Results.Ok(rows);
+            var rows = await conn.QueryAsync<(long Id, string Name, string? Contact)>(
+                "SELECT id, name, contact FROM clients WHERE auth_sub IS NOT NULL ORDER BY name");
+            return Results.Ok(rows.Select(r => new { id = r.Id, name = r.Name, contact = r.Contact }));
         });
 
         // Claim an existing (still unclaimed) client row...
