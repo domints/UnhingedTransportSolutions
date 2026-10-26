@@ -32,7 +32,16 @@ public sealed class TelegramBot(
             return;
         }
 
-        var bot = new TelegramBotClient(opts.BotToken);
+        var bot = new TelegramBotClient(opts.BotToken, new HttpClient(new SocketsHttpHandler())
+        {
+            // The library handles long-polling timeouts per request.
+            Timeout = Timeout.InfiniteTimeSpan,
+            // Force HTTP/1.1: over h2 the container↔Cloudflare path kept
+            // resetting response streams mid-body («Error while copying
+            // content to a stream») on some messages.
+            DefaultRequestVersion = new Version(1, 1),
+            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionExact,
+        });
 
         User me;
         try
@@ -481,8 +490,36 @@ public sealed class TelegramBot(
                 await conn.ExecuteAsync(
                     "UPDATE telegram_outbox SET last_attempt = now(), attempts = attempts + 1, last_error = @err WHERE id = @id",
                     new { m.Id, err = outcome.Error });
+
+            // A 400 that means the chat itself is gone (never /start'ed, blocked,
+            // deactivated / wrong id) makes the stored binding dead weight —
+            // drop it (re-claim re-creates it), so the queue isn't doomed to
+            // repeat the same rejection forever.
+            if (!outcome.Sent && !outcome.Transient && IsDeadChat(outcome.Error))
+            {
+                var unbound = await conn.ExecuteAsync(
+                    "UPDATE clients SET telegram_chat_id = NULL WHERE telegram_chat_id = @cid",
+                    new { cid = m.ChatId });
+                if (unbound > 0)
+                    logger.LogWarning(
+                        "Telegram: chat {cid} is unreachable ({err}) — binding cleared on {n} client(s). Re-claim via the tracking page or /start.",
+                        m.ChatId, outcome.Error, unbound);
+                else
+                    logger.LogWarning(
+                        "Telegram: chat {cid} is unreachable ({err}) and no client row carries it — courier chat id? Check TELEGRAM__COURIERCHATIDS.",
+                        m.ChatId, outcome.Error);
+            }
         }
     }
+
+    /// <summary>True for Telegram 400s meaning the chat itself cannot ever
+    /// receive this bot's messages (vs. a malformed payload, which is our bug
+    /// and deserves the retry cap, not a binding purge).</summary>
+    private static bool IsDeadChat(string? error) => error is not null && (
+        error.Contains("chat not found", StringComparison.OrdinalIgnoreCase) ||
+        error.Contains("bot was blocked", StringComparison.OrdinalIgnoreCase) ||
+        error.Contains("user is deactivated", StringComparison.OrdinalIgnoreCase) ||
+        error.Contains("chat member not found", StringComparison.OrdinalIgnoreCase));
 
     private sealed record SendResult(bool Sent, bool Transient, string? Error);
 

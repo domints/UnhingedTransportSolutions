@@ -157,7 +157,9 @@ public static class AdminShipmentsEndpoints
             //Recipient push (out-of-session, still transactional) + courier alert.
             await telegram.EnqueueShipmentStatusAsync(conn, tx, created.Id, "registered");
             await tx.CommitAsync();
-            _ = telegram.EnqueueAdminAsync($"📦 New shipment: {number} ({origin} → {destination})");
+            // No courier alert here on purpose: whoever creates the shipment
+            // already sees the confirmation in the panel, and the recipient
+            // push (EnqueueShipmentStatusAsync, "registered") carries the news.
 
             var detail = await LoadDetail(conn, created.Id, ct);
             return Results.Created($"/api/admin/shipments/{created.Id}", new { pin, shipment = detail });
