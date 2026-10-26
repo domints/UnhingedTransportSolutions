@@ -40,7 +40,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRouter } from 'vue-router'
 import { api } from '@/api'
 import type { AuthState } from '@/types'
@@ -51,31 +51,48 @@ const loading = ref(true)
 const blocked = ref(false)
 const adminGroup = 'uts-admins'
 
-onMounted(async () => {
+// Unmapped couriers go straight to onboarding ("who are you?"), mapped
+// ones are bounced off it. Keeps the rest of the admin behind a claim.
+function applyGuards(s: AuthState, path: string) {
+  if (!s.isAdmin) return
+  if (s.clientId === null && path !== '/admin/onboarding') {
+    void router.replace('/admin/onboarding')
+  }
+  if (s.clientId !== null && path === '/admin/onboarding') {
+    void router.replace('/admin')
+  }
+}
+
+async function refreshState(path: string) {
   try {
     const s = await api.get<AuthState>('/api/auth/state')
     if (!s.authenticated) {
-      window.location.href = `/auth/login?next=${encodeURIComponent(router.currentRoute.value.fullPath)}`
+      window.location.href = `/auth/login?next=${encodeURIComponent(path)}`
       return
     }
     if (!s.isAdmin) {
       blocked.value = true
     }
     state.value = s
-
-    // Unmapped couriers go straight to onboarding ("who are you?"), mapped
-    // ones are bounced off it. Keeps the rest of the admin behind a claim.
-    if (s.isAdmin && s.clientId === null && router.currentRoute.value.path !== '/admin/onboarding') {
-      await router.replace('/admin/onboarding')
-    }
-    if (s.isAdmin && s.clientId !== null && router.currentRoute.value.path === '/admin/onboarding') {
-      await router.replace('/admin')
-    }
-  } catch (e) {
+    applyGuards(s, path)
+  } catch {
     blocked.value = true
     state.value = { authenticated: false, isAdmin: false, name: null, clientId: null, clientName: null }
-  } finally {
-    loading.value = false
   }
-})
+}
+
+onMounted(() => refreshState(router.currentRoute.value.fullPath).finally(() => (loading.value = false)))
+
+// The layout persists across child-route changes, so the claim flow's
+// router.replace back to /admin would otherwise leave the stale
+// clientId=null state here and the nav menu would stay hidden until a
+// hard reload. Re-fetch while we still believe the user is unclaimed.
+watch(
+  () => router.currentRoute.value.path,
+  async (path) => {
+    if (state.value?.isAdmin && state.value.clientId === null) {
+      await refreshState(path)
+    }
+  },
+)
 </script>
