@@ -313,7 +313,10 @@ public sealed class TelegramBot(
             UPDATE clients
             SET telegram_chat_id = @chatId,
                 telegram_claim_code = NULL,
-                telegram_claim_expires = NULL
+                telegram_claim_expires = NULL,
+                -- linking = (re-)consent: a re-claimed chat that was muted
+                -- before (or under an old chat id) starts receiving again
+                telegram_notifications = TRUE
             WHERE id = @id
             """, new { chatId = chatId.ToString(CultureInfo.InvariantCulture), id = client.Id });
 
