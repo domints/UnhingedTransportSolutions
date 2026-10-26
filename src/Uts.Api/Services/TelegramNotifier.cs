@@ -2,6 +2,7 @@ using Dapper;
 using Npgsql;
 using Uts.Api.Db;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
 
 namespace Uts.Api.Services;
 
@@ -9,7 +10,7 @@ namespace Uts.Api.Services;
 /// are embedded in the same DB transaction as the change itself (nothing is
 /// lost if the process dies right after a commit); admin alerts open their own
 /// connection and are fire-and-forget.</summary>
-public sealed class TelegramNotifier(TelegramOptions options, Database db)
+public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogger<TelegramNotifier> logger)
 {
     public const int MaxPerMessageButtons = 5;
 
@@ -21,6 +22,8 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db)
         await conn.ExecuteAsync(
             "INSERT INTO telegram_outbox (chat_id, text, keyboard_json) VALUES (@chatId, @text, @keyboard)",
             new { chatId, text, keyboard = keyboardJson }, tx);
+        logger.LogInformation("Telegram: queued outbox row → chat {chatId}, {len} chars, keyboard={kb}: {preview}",
+            chatId, text.Length, keyboardJson != null, Trunc(text));
     }
 
     /// <summary>Status change push to the recipient (skips missing chat / muted).</summary>
@@ -38,10 +41,22 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db)
             JOIN cities dc ON dc.code = s.destination_code
             WHERE s.id = @id
             """, new { id = shipmentId });
-        if (r.ChatId is null || !r.Notifications)
+        if (r.ChatId is null)
+        {
+            logger.LogInformation("Telegram: recipient push SKIPPED for {number} ({status}) — recipient has no chat id.",
+                r.Number, status);
             return;
+        }
+        if (!r.Notifications)
+        {
+            logger.LogInformation("Telegram: recipient push SKIPPED for {number} ({status}) — recipient muted notifications.",
+                r.Number, status);
+            return;
+        }
 
         var text = TelegramTexts.ShipmentStatus(r.Number, status, r.DestinationName);
+        logger.LogInformation("Telegram: status push for {number} ({status}) → chat {chatId}.",
+            r.Number, status, r.ChatId);
         await EnqueueAsync(conn, tx, r.ChatId, text, TrackKeyboard(r.Number, maxButtons: 1));
     }
 
@@ -65,14 +80,18 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db)
     {
         var ids = options.CourierChatIdSet();
         if (ids.Count == 0)
+        {
+            logger.LogInformation("Telegram: admin alert NOT queued (no courier chat ids configured): {preview}", Trunc(text));
             return;
+        }
 
+        logger.LogInformation("Telegram: admin alert → {n} courier chat(s) [{ids}].", ids.Count, string.Join(", ", ids));
         await using var conn = await db.OpenAsync();
         foreach (var id in ids)
-            await conn.ExecuteAsync(
-                "INSERT INTO telegram_outbox (chat_id, text) VALUES (@chatId, @text)",
-                new { chatId = id, text });
+            await EnqueueAsync(conn, null!, id, text);
     }
+
+    private static string Trunc(string s) => s.Length <= 60 ? s : s[..57] + "…";
 
     /// <summary>One URL button to the tracking page (null when no public URL configured).</summary>
     public string? TrackKeyboard(string number, int maxButtons = 1)

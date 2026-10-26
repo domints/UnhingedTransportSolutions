@@ -467,6 +467,10 @@ public sealed class TelegramBot(
             LIMIT 20
             """)).AsList();
 
+        if (pending.Count > 0)
+            logger.LogInformation("Telegram: draining {n} outbox message(s) (ids {ids}).",
+                pending.Count, string.Join(", ", pending.Select(p => p.Id)));
+
         foreach (var m in pending)
         {
             var outcome = long.TryParse(m.ChatId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var chatId)
@@ -474,8 +478,11 @@ public sealed class TelegramBot(
                 : new SendResult(false, false, $"bad chat id '{m.ChatId}'"); // permanent — garbage in the queue
 
             if (outcome.Sent)
+            {
+                logger.LogInformation("Telegram: outbox #{id} delivered to {chat}.", m.Id, m.ChatId);
                 await conn.ExecuteAsync(
                     "UPDATE telegram_outbox SET sent_at = now(), last_attempt = now() WHERE id = @id", new { m.Id });
+            }
             else if (outcome.Transient)
                 // Telegram-side / network hiccup: keep the attempt budget intact.
                 // The backoff gate below already prevents hammering; the message
@@ -530,19 +537,24 @@ public sealed class TelegramBot(
     {
         try
         {
-            await bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
+            var sent = await bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
+            logger.LogInformation("Telegram: sendMessage ok → chat {chatId}, telegram message id {mid}.", chatId, sent.MessageId);
             return new SendResult(true, true, null);
         }
         catch (ApiRequestException ex)
         {
             var transient = ex.ErrorCode is 429 or >= 500;
-            logger.LogWarning("Telegram: send to {chatId} {verdict} ({code}): {msg}",
+            logger.LogWarning(ex, "Telegram: send to {chatId} {verdict} ({code}) — {msg}",
                 chatId, transient ? "rejected, will retry" : "rejected permanently", ex.ErrorCode, ex.Message);
             return new SendResult(false, transient, $"telegram {ex.ErrorCode}: {ex.Message}");
         }
         catch (Exception ex) // HttpRequestException, timeouts, reset mid-body — transport-level, transient
         {
-            logger.LogWarning("Telegram: send to {chatId} failed on transport: {msg}", chatId, ex.Message);
+            // Full exception (type, inner chain, stack) — «Error while copying
+            // content to a stream» hides the real cause in inner exceptions.
+            logger.LogWarning(ex,
+                "Telegram: send to {chatId} failed on transport — text {len} chars, keyboard={kb}, http={ver}.",
+                chatId, text.Length, keyboard != null, "1.1-forced");
             return new SendResult(false, true, ex.Message);
         }
     }
