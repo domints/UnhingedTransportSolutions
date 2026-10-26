@@ -224,10 +224,10 @@ public static class AdminCatalogEndpoints
 
             await using var conn = await db.OpenAsync(ct);
 
-            // Default courier = whoever creates the trip (no request => nobody,
-            // which is fine for anonymous batch bookkeeping).
+            // Default courier = whoever creates the trip (no request and no
+            // creator mapping => nobody). Explicit 0 = "no courier".
             var creator = await identity.ResolveAsync(conn, http.User);
-            var courier = req.CourierClientId ?? creator?.Id;
+            var courier = req.CourierClientId is 0 ? null : (req.CourierClientId ?? creator?.Id);
             if (courier is not null && !await conn.ExecuteScalarAsync<bool>(
                     "SELECT EXISTS (SELECT 1 FROM clients WHERE id = @courier)", new { courier }))
                 return Bad("Courier client does not exist.");
@@ -258,7 +258,9 @@ public static class AdminCatalogEndpoints
                 return Bad("Trip status must be 'planned', 'completed' or 'cancelled'.");
 
             await using var conn = await db.OpenAsync(ct);
-            if (req.CourierClientId is { } courier && !await conn.ExecuteScalarAsync<bool>(
+            // 0 = explicit "no courier" (client ids start at 1; anything else
+            // must name an existing client row).
+            if (req.CourierClientId is { } courier and not 0 && !await conn.ExecuteScalarAsync<bool>(
                     "SELECT EXISTS (SELECT 1 FROM clients WHERE id = @courier)", new { courier }))
                 return Bad("Courier client does not exist.");
             var existing = await conn.QuerySingleOrDefaultAsync<(string? OriginCode, string? DestinationCode)>(
@@ -282,7 +284,8 @@ public static class AdminCatalogEndpoints
                     status           = COALESCE(@status, status),
                     notes            = COALESCE(@notes, notes),
                     transport_mode   = COALESCE(@mode, transport_mode),
-                    courier_client_id = COALESCE(@courier, courier_client_id)
+                    courier_client_id = CASE WHEN @courier = 0 THEN NULL
+                                             ELSE COALESCE(@courier, courier_client_id) END
                 WHERE id = @id
                 RETURNING id, title, origin_code AS OriginCode, destination_code AS DestinationCode,
                           planned_date AS PlannedDate, status, notes, created_at AS CreatedAt,
@@ -544,6 +547,8 @@ public static class AdminCatalogEndpoints
 
     public sealed record UpdateCityRequest(string? Name, bool? Active);
 
+    /// <summary>Null = leave the field alone on PUT; 0 = explicitly remove the
+    /// courier assignment (client ids start at 1).</summary>
     public sealed record UpsertTripRequest(
         string? Title, string? OriginCode, string? DestinationCode, DateTime? PlannedDate,
         string? Status, string? Notes, List<string>? Stops, string? TransportMode,

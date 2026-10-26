@@ -5,14 +5,14 @@ namespace Uts.Api.Services;
 public static class TelegramTexts
 {
     public const string Help =
-        "UTS — powiadomienia o paczkach 📦\n\n" +
-        "/start <kod> — powiąż ten czat ze swoimi paczkami (kod dostaniesz na stronie śledzenia lub od kuriera)\n" +
-        "/notifications — wyłącz lub włącz powiadomienia 🔔/🔕\n\n" +
+        "UTS - powiadomienia o paczkach 📦\n\n" +
+        "/start <kod> - powiąż ten czat ze swoimi paczkami (kod dostaniesz na stronie śledzenia lub od kuriera)\n" +
+        "/notifications - wyłącz lub włącz powiadomienia 🔔/🔕\n\n" +
         "Kurier ma też komendy operacyjne: /leaving, /arrived, /deliver, /packlist";
 
     public const string NoBinding =
         "Ten czat nie jest jeszcze powiązany z żadnym odbiorcą.\n" +
-        "Napisz /start <kod> — kod dostaniesz na stronie śledzenia po odblokowaniu paczki, albo od kuriera.";
+        "Napisz /start <kod> - kod dostaniesz na stronie śledzenia po odblokowaniu paczki, albo od kuriera.";
 
     public const string ClaimOk =
         "Powiadomienia aktywne ✅ Będę informował Cię o paczkach adresowanych do Ciebie.";
@@ -57,7 +57,7 @@ public static class TelegramTexts
         => $"{Courier(courierName)} wyrusza w trasę 🚆 Twoje paczki w tej podróży: {Join(numbers)}.";
 
     public static string TripArrival(string? courierName, string? city, IEnumerable<string> numbers)
-        => $"{Courier(courierName)} dotarł do {city ?? "miasta docelowego"} 📍 Umówimy dostawę Twoich paczek: {Join(numbers)}.";
+        => $"{Courier(courierName)} dotarł do {city ?? "miasta docelowego"} 📍 Umówmy dostawę Twoich paczek: {Join(numbers)}.";
 
     /// <summary>"Kurier Marek" as a sentence subject; a joint name when the trip has no assigned courier.</summary>
     private static string Courier(string? name)
@@ -65,10 +65,10 @@ public static class TelegramTexts
 
     public static string HelpCourier()
         => "Komendy kuriera:\n" +
-           "/leaving — oznacz wszystkie paczki z najbliższej podróży jako w drodze\n" +
-           "/arrived — oznacz wszystkie jako dotarłe do miasta docelowego (podróż = dokończona)\n" +
-           "/deliver — dostarczaj paczki pojedynczo\n" +
-           "/packlist — wykaz paczek najbliższej podróży";
+           "/leaving - oznacz wszystkie paczki z najbliższej podróży jako w drodze\n" +
+           "/arrived - oznacz wszystkie jako dotarłe do miasta docelowego (podróż = dokończona)\n" +
+           "/deliver - dostarczaj paczki pojedynczo\n" +
+           "/packlist - wykaz paczek najbliższej podróży";
 
     private static string Join(IEnumerable<string> numbers) => string.Join(", ", numbers);
 }
