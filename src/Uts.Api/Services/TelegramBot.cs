@@ -567,7 +567,9 @@ public sealed class TelegramBot(
 
     /// <summary>Outbox rows store a serialized Telegram inline keyboard (URL
     /// buttons pointing at the tracking page). Parse it back into the
-    /// library's markup type.</summary>
+    /// library's markup type. NOTE: builds concrete button arrays up front —
+    /// a lazy projection over the JsonDocument dies with
+    /// ObjectDisposedException when the library serializes the markup later.</summary>
     private static InlineKeyboardMarkup? ParseKeyboard(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -577,16 +579,22 @@ public sealed class TelegramBot(
             using var doc = JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("inline_keyboard", out var rows))
                 return null;
-            var markup = rows.EnumerateArray()
-                .Select(row => row.EnumerateArray().Select(button =>
+
+            var materialized = new List<InlineKeyboardButton[]>();
+            foreach (var row in rows.EnumerateArray())
+            {
+                var buttons = new List<InlineKeyboardButton>();
+                foreach (var button in row.EnumerateArray())
                 {
                     var text = button.TryGetProperty("text", out var t) ? t.GetString() ?? "?" : "?";
-                    return button.TryGetProperty("url", out var url)
+                    buttons.Add(button.TryGetProperty("url", out var url)
                         ? InlineKeyboardButton.WithUrl(text, url.GetString() ?? "")
                         : InlineKeyboardButton.WithCallbackData(text,
-                              button.TryGetProperty("callback_data", out var d) ? d.GetString() ?? "" : "");
-                }).ToArray());
-            return new InlineKeyboardMarkup(markup);
+                              button.TryGetProperty("callback_data", out var d) ? d.GetString() ?? "" : ""));
+                }
+                materialized.Add(buttons.ToArray());
+            }
+            return new InlineKeyboardMarkup(materialized);
         }
         catch
         {
