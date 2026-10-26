@@ -34,7 +34,7 @@
           <dt>Destination</dt>
           <dd>{{ s.destinationCode }} · {{ s.destinationName }}</dd>
           <dt>Contents</dt>
-          <dd style="grid-column: span 3">{{ s.description }}</dd>
+          <dd>{{ s.description }}</dd>
           <dt>Transport</dt>
           <dd>{{ modeLabel(s.transportMode) }}</dd>
           <dt>Registered</dt>
@@ -43,7 +43,7 @@
           <dd>{{ s.deliveredAt ? fmtDateTime(s.deliveredAt) : 'Pending' }}</dd>
           <template v-if="s.notes">
             <dt>Notes</dt>
-            <dd style="grid-column: span 3">{{ s.notes }}</dd>
+            <dd>{{ s.notes }}</dd>
           </template>
         </dl>
       </div>

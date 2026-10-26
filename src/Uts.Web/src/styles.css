@@ -282,9 +282,11 @@ label {
 }
 
 /* ---------- detail grid ---------- */
+/* Label | value pairs at all widths (matches the tracking page; two-pairs-
+   per-row previously read as run-on text like "Sender Dominik Recipient"). */
 .grid-dl {
   display: grid;
-  grid-template-columns: minmax(120px, 160px) 1fr minmax(120px, 160px) 1fr;
+  grid-template-columns: minmax(120px, 180px) 1fr;
   gap: .55rem 1rem;
 }
 .grid-dl dt {
@@ -295,8 +297,7 @@ label {
   color: var(--muted);
   align-self: center;
 }
-.grid-dl dd { margin: 0; }
-@media (max-width: 720px) { .grid-dl { grid-template-columns: minmax(110px, 140px) 1fr; } }
+.grid-dl dd { margin: 0; grid-column: 2; }
 
 /* ---------- timeline ---------- */
 .timeline {
