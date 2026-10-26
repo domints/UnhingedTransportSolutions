@@ -1,4 +1,5 @@
 <template>
+  <div class="landing">
   <main class="container">
     <section class="hero">
       <span class="hero__eyebrow">Now with 0 (zero) depots</span>
@@ -44,6 +45,7 @@
       <a href="/admin">Staff area</a>
     </footer>
   </main>
+  </div>
 </template>
 
 <script setup lang="ts">
