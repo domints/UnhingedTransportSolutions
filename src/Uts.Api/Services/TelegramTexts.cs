@@ -63,12 +63,20 @@ public static class TelegramTexts
     private static string Courier(string? name)
         => string.IsNullOrWhiteSpace(name) ? "Kurier" : $"Kurier {name}";
 
+    /// <summary>Internal notes changed — recipient gets the new content
+    /// straight into the chat (only for bound + unmuted chats).</summary>
+    public static string NotesUpdated(string number, string content)
+        => $"Do paczki {number} dodano nową informację 📝\n{content}";
+
+    public static string NotesCleared(string number)
+        => $"Informacja o paczce {number} została usunięta 📝";
+
     public static string HelpCourier()
         => "Komendy kuriera:\n" +
-           "/leaving - oznacz wszystkie paczki z najbliższej podróży jako w drodze\n" +
-           "/arrived - oznacz wszystkie jako dotarłe do miasta docelowego (podróż = dokończona)\n" +
-           "/deliver - dostarczaj paczki pojedynczo\n" +
-           "/packlist - wykaz paczek najbliższej podróży";
+           "/leaving — oznacz wszystkie paczki z najbliższej podróży jako w drodze\n" +
+           "/arrived — oznacz wszystkie jako dotarłe do miasta docelowego (podróż = dokończona)\n" +
+           "/deliver — dostarczaj paczki pojedynczo\n" +
+           "/packlist — wykaz paczek najbliższej podróży";
 
     private static string Join(IEnumerable<string> numbers) => string.Join(", ", numbers);
 }

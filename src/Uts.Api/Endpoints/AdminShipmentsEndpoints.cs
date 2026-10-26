@@ -288,18 +288,33 @@ public static class AdminShipmentsEndpoints
             return Results.Ok(detail);
         });
 
-        g.MapPost("/{id:long}/notes", async (long id, UpdateNotesRequest req, Database db, CancellationToken ct) =>
+        g.MapPost("/{id:long}/notes", async (long id, UpdateNotesRequest req, Database db, TelegramNotifier telegram, CancellationToken ct) =>
         {
             var notes = string.IsNullOrWhiteSpace(req.Notes) ? null : req.Notes.Trim();
 
             await using var conn = await db.OpenAsync(ct);
-            if (!await conn.ExecuteScalarAsync<bool>(
-                    "SELECT EXISTS (SELECT 1 FROM shipments WHERE id = @id)", new { id }))
+            var existing = await conn.QuerySingleOrDefaultAsync<(string? Notes, string Number)>(
+                "SELECT notes, tracking_number FROM shipments WHERE id = @id", new { id });
+            if (existing.Number is null)
                 return Results.NotFound(new { error = "Shipment not found." });
 
-            await conn.ExecuteAsync(
-                "UPDATE shipments SET notes = @notes, updated_at = now() WHERE id = @id",
-                new { notes, id });
+            if (existing.Notes != notes)
+            {
+                await using var tx = await conn.BeginTransactionAsync(ct);
+                await conn.ExecuteAsync(
+                    "UPDATE shipments SET notes = @notes, updated_at = now() WHERE id = @id",
+                    new { notes, id }, tx);
+
+                // Same event type the manual events use; source 'auto' marks it
+                // as a system-generated entry (the timeline dot styling is by type).
+                await conn.ExecuteAsync(
+                    "INSERT INTO shipment_events (shipment_id, type, source, message) VALUES (@id, 'note', 'auto', @msg)",
+                    new { id, msg = notes is null ? "Internal note cleared." : "Internal note updated." }, tx);
+
+                await telegram.EnqueueNotesUpdatedAsync(conn, tx, id, notes);
+                await tx.CommitAsync(ct);
+            }
+
             return Results.Ok(await LoadDetail(conn, id, ct));
         });
 

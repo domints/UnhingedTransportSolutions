@@ -63,6 +63,41 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
         await EnqueueAsync(conn, tx, r.ChatId, text, TrackKeyboard(r.Number, maxButtons: 1));
     }
 
+    /// <summary>Push when the internal notes are updated (or cleared): the
+    /// recipient receives the new content directly in the chat — same audience
+    /// rules as status pushes (bound chat, not muted).</summary>
+    public async Task EnqueueNotesUpdatedAsync(NpgsqlConnection conn, NpgsqlTransaction tx, long shipmentId, string? notes)
+    {
+        var r = await conn.QuerySingleOrDefaultAsync<(string? ChatId, bool Notifications, string Number)>(
+            """
+            SELECT c.telegram_chat_id::text,
+                   c.telegram_notifications,
+                   s.tracking_number
+            FROM shipments s
+            JOIN clients c ON c.id = s.recipient_id
+            WHERE s.id = @id
+            """, new { id = shipmentId });
+        if (r.ChatId is null)
+        {
+            logger.LogInformation("Telegram: notes push SKIPPED for {number} — recipient has no chat id.", r.Number);
+            return;
+        }
+        if (!r.Notifications)
+        {
+            logger.LogInformation("Telegram: notes push SKIPPED for {number} — recipient muted notifications.", r.Number);
+            return;
+        }
+
+        // notes can be arbitrarily long; keep the chat message sane.
+        var content = notes is null ? null : (notes.Length > 800 ? notes[..797] + "…" : notes);
+        var text = notes is null
+            ? TelegramTexts.NotesCleared(r.Number)
+            : TelegramTexts.NotesUpdated(r.Number, content!);
+        logger.LogInformation("Telegram: notes push for {number} (cleared={cleared}) → chat {chatId}.",
+            r.Number, notes is null, r.ChatId);
+        await EnqueueAsync(conn, tx, r.ChatId, text, TrackKeyboard(r.Number, maxButtons: 1));
+    }
+
     /// <summary>Pushes about the whole haul to each recipient with their parcels listed.</summary>
     public async Task EnqueueTripAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, string? destinationName,
