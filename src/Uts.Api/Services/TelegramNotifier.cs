@@ -30,15 +30,18 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
     public async Task EnqueueShipmentStatusAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, long shipmentId, string status)
     {
-        var r = await conn.QuerySingleOrDefaultAsync<(string? ChatId, bool Notifications, string Number, string? DestinationName)>(
+        var r = await conn.QuerySingleOrDefaultAsync<(string? ChatId, bool Notifications, string Number, string? DestinationName, string? CourierName)>(
             """
             SELECT c.telegram_chat_id::text,
                    c.telegram_notifications,
                    s.tracking_number,
-                   dc.name
+                   dc.name,
+                   cc.name
             FROM shipments s
             JOIN clients c ON c.id = s.recipient_id
             JOIN cities dc ON dc.code = s.destination_code
+            LEFT JOIN trips t ON t.id = s.trip_id
+            LEFT JOIN clients cc ON cc.id = t.courier_client_id
             WHERE s.id = @id
             """, new { id = shipmentId });
         if (r.ChatId is null)
@@ -54,7 +57,7 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
             return;
         }
 
-        var text = TelegramTexts.ShipmentStatus(r.Number, status, r.DestinationName);
+        var text = TelegramTexts.ShipmentStatus(r.Number, status, r.DestinationName, r.CourierName);
         logger.LogInformation("Telegram: status push for {number} ({status}) → chat {chatId}.",
             r.Number, status, r.ChatId);
         await EnqueueAsync(conn, tx, r.ChatId, text, TrackKeyboard(r.Number, maxButtons: 1));
@@ -78,7 +81,7 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
     /// <summary>Admin/courier alerts — own connection, no shared transaction.</summary>
     public async Task EnqueueAdminAsync(string text)
     {
-        var ids = options.CourierChatIdSet();
+        var ids = options.AdminChatIdSet();
         if (ids.Count == 0)
         {
             logger.LogInformation("Telegram: admin alert NOT queued (no courier chat ids configured): {preview}", Trunc(text));

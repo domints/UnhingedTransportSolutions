@@ -48,7 +48,7 @@ public static class AuthEndpoints
             return Results.SignOut(props, [CookieAuthenticationDefaults.AuthenticationScheme]);
         });
 
-        app.MapGet("/api/auth/state", (HttpContext http) =>
+        app.MapGet("/api/auth/state", async (HttpContext http, AdminIdentity identity, CancellationToken ct) =>
         {
             var c = http.RequestServices.GetRequiredService<IConfiguration>();
             var user = http.User;
@@ -56,6 +56,8 @@ public static class AuthEndpoints
             var groupsClaim = c["OIDC:GroupsClaim"] ?? "groups";
             var adminGroup = c["Auth:AdminGroup"] ?? "uts-admins";
             var isAdmin = authenticated && user.HasClaim(groupsClaim, adminGroup);
+
+            var client = isAdmin ? await identity.ResolveAsync(user, ct) : null;
 
             return Results.Json(new
             {
@@ -66,6 +68,10 @@ public static class AuthEndpoints
                       ?? user.FindFirst("name")?.Value
                       ?? user.FindFirst(ClaimTypes.Name)?.Value
                     : null,
+                clientId = client?.Id,
+                // Null also for admins who are logged in but still need onboarding —
+                // the SPA uses this to gate on /admin/onboarding.
+                clientName = client?.Name,
             });
         });
     }

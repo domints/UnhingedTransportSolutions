@@ -17,8 +17,14 @@ public sealed class TripBulk(TelegramNotifier telegram)
     {
         var from = to == ShipmentStatus.InTransit ? ShipmentStatus.PickedUp : ShipmentStatus.InTransit;
 
-        var trip = await conn.QuerySingleOrDefaultAsync<(string Title, string? DestinationName)>(
-            "SELECT t.title, dc.name FROM trips t LEFT JOIN cities dc ON dc.code = t.destination_code WHERE t.id = @id",
+        var trip = await conn.QuerySingleOrDefaultAsync<(string Title, string? DestinationName, string? CourierName)>(
+            """
+            SELECT t.title, dc.name, cc.name
+            FROM trips t
+            LEFT JOIN cities dc ON dc.code = t.destination_code
+            LEFT JOIN clients cc ON cc.id = t.courier_client_id
+            WHERE t.id = @id
+            """,
             new { id = tripId });
         if (trip.Title is null)
             return null;
@@ -68,10 +74,10 @@ public sealed class TripBulk(TelegramNotifier telegram)
         {
             if (to == ShipmentStatus.InTransit)
                 await telegram.EnqueueTripAsync(conn, tx, trip.DestinationName,
-                    (city, numbers) => TelegramTexts.TripDeparture(numbers), notified);
+                    (city, numbers) => TelegramTexts.TripDeparture(trip.CourierName, numbers), notified);
             else
                 await telegram.EnqueueTripAsync(conn, tx, trip.DestinationName,
-                    (city, numbers) => TelegramTexts.TripArrival(city, numbers), notified);
+                    (city, numbers) => TelegramTexts.TripArrival(trip.CourierName, city, numbers), notified);
         }
 
         await tx.CommitAsync();

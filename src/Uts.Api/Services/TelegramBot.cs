@@ -144,20 +144,24 @@ public sealed class TelegramBot(
                 break;
 
             case "/leaving":
+                if (!await CourierGuardAsync(bot, opts, chatId2, ct)) return;
                 await PickTripAsync(bot, chatId2, ShipmentStatus.InTransit,
                     "Najbliższa podróż — oznaczyć paczki jako w drodze? 🚆", leavePrefix, ct);
                 break;
 
             case "/arrived":
+                if (!await CourierGuardAsync(bot, opts, chatId2, ct)) return;
                 await PickTripAsync(bot, chatId2, ShipmentStatus.AtDestination,
                     "Dotarłeś? Oznaczyć paczki jako dotarłe do miasta docelowego? 📍", arrivePrefix, ct);
                 break;
 
             case "/deliver":
+                if (!await CourierGuardAsync(bot, opts, chatId2, ct)) return;
                 await ShowDeliverableAsync(bot, chatId2, ct);
                 break;
 
             case "/packlist":
+                if (!await CourierGuardAsync(bot, opts, chatId2, ct)) return;
                 await ShowPacklistAsync(bot, chatId2, ct);
                 break;
 
@@ -193,7 +197,7 @@ public sealed class TelegramBot(
 
         if (data.StartsWith(leavePrefix) || data.StartsWith(arrivePrefix))
         {
-            if (!IsCourier(opts, chatId))
+            if (!await IsCourierAsync(opts, chatId, ct))
             {
                 await Finish(TelegramTexts.CourierOnly);
                 return;
@@ -226,7 +230,7 @@ public sealed class TelegramBot(
 
         if (data.StartsWith("deliver:"))
         {
-            if (!IsCourier(opts, chatId))
+            if (!await IsCourierAsync(opts, chatId, ct))
             {
                 await Finish(TelegramTexts.CourierOnly);
                 return;
@@ -252,7 +256,7 @@ public sealed class TelegramBot(
 
         if (data.StartsWith("deliverok:"))
         {
-            if (!IsCourier(opts, chatId))
+            if (!await IsCourierAsync(opts, chatId, ct))
             {
                 await Finish(TelegramTexts.CourierOnly);
                 return;
@@ -364,8 +368,28 @@ public sealed class TelegramBot(
 
     // ---------------------------------------------------------------- courier
 
-    private bool IsCourier(TelegramOptions opts, long chatId) =>
-        opts.CourierChatIdSet().Contains(chatId.ToString(CultureInfo.InvariantCulture));
+    /// <summary>Courier authorization: allow the chat if it belongs to a client
+    /// mapped to a login identity (auth_sub, set through the onboarding claim
+    /// flow) — or if the chat id is on the legacy env list (pre-onboarding
+    /// installs where nobody completed onboarding yet).</summary>
+    private async Task<bool> IsCourierAsync(TelegramOptions opts, long chatId, CancellationToken ct)
+    {
+        var chat = chatId.ToString(CultureInfo.InvariantCulture);
+        await using var conn = await db.OpenAsync(ct);
+        var mapped = await conn.ExecuteScalarAsync<bool>(
+            "SELECT EXISTS (SELECT 1 FROM clients WHERE telegram_chat_id = @chatId AND auth_sub IS NOT NULL)",
+            new { chatId = chat });
+        return mapped || opts.AdminChatIdSet().Contains(chat);
+    }
+
+    /// <summary>Command/callback guard: replies to impostors instead of them.</summary>
+    private async Task<bool> CourierGuardAsync(TelegramBotClient bot, TelegramOptions opts, long chatId, CancellationToken ct)
+    {
+        if (await IsCourierAsync(opts, chatId, ct))
+            return true;
+        await SendAsync(bot, chatId, TelegramTexts.CourierOnly, null, ct);
+        return false;
+    }
 
     private async Task PickTripAsync(TelegramBotClient bot, long chatId, string to, string question, string callbackPrefix, CancellationToken ct)
     {

@@ -22,6 +22,7 @@ SqlMapper.AddTypeHandler(new StringArrayTypeHandler());
 var cfg = builder.Configuration;
 
 builder.Services.AddSingleton<Database>();
+builder.Services.AddSingleton<AdminIdentity>();
 builder.Services.AddSingleton<NumberService>();
 builder.Services.AddSingleton<PinService>();
 builder.Services.AddHttpClient();
@@ -117,12 +118,15 @@ if (cfg.GetValue<bool>("Auth:DevAuth"))
 {
     var devAdminGroup = cfg["Auth:AdminGroup"] ?? "uts-admins";
     var devGroupsClaim = cfg["OIDC:GroupsClaim"] ?? "groups";
+    // Dev routine: sub is derived from the dev name so the onboarding claim
+    // flow works locally too (each distinct name = a distinct identity).
     app.MapPost("/api/dev/login", async (HttpContext http, string? name) =>
     {
         var who = string.IsNullOrWhiteSpace(name) ? "dev-admin" : name.Trim();
         var claims = new List<Claim>
         {
             new("preferred_username", who),
+            new("sub", "dev-" + who),
             new(devGroupsClaim, devAdminGroup),
         };
         var identity = new ClaimsIdentity(claims, "dev");
@@ -139,6 +143,7 @@ if (cfg.GetValue<bool>("Auth:DevAuth"))
         var claims = new List<Claim>
         {
             new("preferred_username", who),
+            new("sub", "dev-" + who),
             new(devGroupsClaim, devAdminGroup),
         };
         var identity = new ClaimsIdentity(claims, "dev");
@@ -153,6 +158,7 @@ app.MapTrackEndpoints();
 
 app.MapAdminShipments();
 app.MapAdminCatalog();
+app.MapAdminIdentity();
 
 app.MapFallback("/api/{**path}", () => Results.Json(new { error = "not_found" },
     statusCode: StatusCodes.Status404NotFound));

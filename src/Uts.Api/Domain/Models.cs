@@ -22,7 +22,9 @@ public record Trip(
     string Status,
     string? Notes,
     DateTime CreatedAt,
-    string TransportMode);
+    string TransportMode,
+    long? CourierClientId = null,
+    string? CourierName = null);
 
 public record TripListItem(
     long Id,
@@ -35,7 +37,9 @@ public record TripListItem(
     DateTime CreatedAt,
     long ShipmentCount,
     string[] Stops,
-    string TransportMode);
+    string TransportMode,
+    long? CourierClientId = null,
+    string? CourierName = null);
 
 /// <summary>Recurring-route preset so regular round-trips can be spawned
 /// (optionally with the mirrored return leg) with one click.</summary>

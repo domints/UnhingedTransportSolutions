@@ -35,24 +35,33 @@ public static class TelegramTexts
         _               => status,
     };
 
-    /// <summary>Single-shipment status push (recipient).</summary>
-    public static string ShipmentStatus(string number, string status, string? destinationName) => status switch
+    /// <summary>Single-shipment status push (recipient). Movements that involve a
+    /// courier name the person the parcel travelled with, when we know it.</summary>
+    public static string ShipmentStatus(string number, string status, string? destinationName, string? courierName = null) => status switch
     {
         "registered"     => $"Masz nową paczkę: {number} → {destinationName ?? "?"}.",
         "picked_up"     => $"Paczka {number} została odebrana 📦",
-        "in_transit"    => $"Paczka {number} jest w drodze 🚆",
-        "at_destination" => $"Kurier dotarł do {destinationName ?? "miasta docelowego"} 📍 Dostawa zostanie umówiona wkrótce.",
-        "delivered"     => $"Paczka {number} dostarczona ✅",
+        "in_transit"    => courierName is null
+            ? $"Paczka {number} jest w drodze 🚆"
+            : $"Paczka {number} jest w drodze z kurierem {courierName} 🚆",
+        "at_destination" => $"{Courier(courierName)} dotarł do {destinationName ?? "miasta docelowego"} 📍 Dostawa zostanie umówiona wkrótce.",
+        "delivered"     => courierName is null
+            ? $"Paczka {number} dostarczona ✅"
+            : $"{Courier(courierName)} dostarczył paczkę {number} ✅",
         "cancelled"     => $"Paczka {number} została anulowana ❌",
         "lost"          => $"Niestety paczka {number} się nie odnalazła 😞 Przepraszamy.",
         _               => $"Paczka {number}: {StatusLabel(status)}.",
     };
 
-    public static string TripDeparture(IEnumerable<string> numbers)
-        => $"Wyruszam w trasę 🚆 Twoje paczki w tej podróży: {Join(numbers)}.";
+    public static string TripDeparture(string? courierName, IEnumerable<string> numbers)
+        => $"{Courier(courierName)} wyrusza w trasę 🚆 Twoje paczki w tej podróży: {Join(numbers)}.";
 
-    public static string TripArrival(string? city, IEnumerable<string> numbers)
-        => $"Dotarłem do {city ?? "miasta docelowego"} 📍 Umówimy dostawę Twoich paczek: {Join(numbers)}.";
+    public static string TripArrival(string? courierName, string? city, IEnumerable<string> numbers)
+        => $"{Courier(courierName)} dotarł do {city ?? "miasta docelowego"} 📍 Umówimy dostawę Twoich paczek: {Join(numbers)}.";
+
+    /// <summary>"Kurier Marek" as a sentence subject; a joint name when the trip has no assigned courier.</summary>
+    private static string Courier(string? name)
+        => string.IsNullOrWhiteSpace(name) ? "Kurier" : $"Kurier {name}";
 
     public static string HelpCourier()
         => "Komendy kuriera:\n" +

@@ -15,11 +15,20 @@ public sealed class TelegramOptions
     /// <summary>Bot username (without @). Prefilled from getMe at startup.</summary>
     public string? BotUsername { get; set; }
 
-    /// <summary>Chat IDs that may run courier commands, comma-separated.</summary>
+    /// <summary>Chat IDs that get app-admin alerts (bruteforce, PIN regen, …),
+    /// comma-separated. Also the legacy fallback for courier-command
+    /// authorization (env: TELEGRAM__ADMINCHATIDS; old name
+    /// TELEGRAM__COURIERCHATIDS still works).</summary>
     public string? CourierChatIds { get; set; }
 
-    public IReadOnlySet<string> CourierChatIdSet()
-        => (CourierChatIds ?? "")
+    public string? AdminChatIds { get; set; }
+
+    public IReadOnlySet<string> AdminChatIdSet()
+        => Chunk(AdminChatIds) is { Count: > 0 } ids ? ids
+           : Chunk(CourierChatIds); // legacy-name fallback
+
+    private static IReadOnlySet<string> Chunk(string? csv)
+        => (csv ?? "")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToHashSet();
 

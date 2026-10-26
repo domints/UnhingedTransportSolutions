@@ -186,8 +186,11 @@ public static class AdminCatalogEndpoints
                        t.created_at       AS CreatedAt,
                        (SELECT COUNT(*) FROM shipments s WHERE s.trip_id = t.id) AS ShipmentCount,
                        ARRAY[]::text[]    AS Stops,
-                       t.transport_mode   AS TransportMode
+                       t.transport_mode   AS TransportMode,
+                       t.courier_client_id AS CourierClientId,
+                       cc.name             AS CourierName
                 FROM trips t
+                LEFT JOIN clients cc ON cc.id = t.courier_client_id
                 {filter}
                 ORDER BY CASE t.status WHEN 'planned' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END,
                          t.planned_date ASC NULLS LAST,
@@ -213,13 +216,22 @@ public static class AdminCatalogEndpoints
             return Results.Ok(rows);
         });
 
-        g.MapPost("/", async (UpsertTripRequest req, Database db, CancellationToken ct) =>
+        g.MapPost("/", async (UpsertTripRequest req, Database db, AdminIdentity identity, HttpContext http, CancellationToken ct) =>
         {
             var title = req.Title?.Trim();
             if (string.IsNullOrEmpty(title))
                 return Bad("Trip title is required.");
 
             await using var conn = await db.OpenAsync(ct);
+
+            // Default courier = whoever creates the trip (no request => nobody,
+            // which is fine for anonymous batch bookkeeping).
+            var creator = await identity.ResolveAsync(conn, http.User);
+            var courier = req.CourierClientId ?? creator?.Id;
+            if (courier is not null && !await conn.ExecuteScalarAsync<bool>(
+                    "SELECT EXISTS (SELECT 1 FROM clients WHERE id = @courier)", new { courier }))
+                return Bad("Courier client does not exist.");
+
             if (await ValidateStops(conn, req.OriginCode, req.DestinationCode, req.Stops) is { } stopErr)
                 return Bad(stopErr);
             if (!ModeValid(req.TransportMode))
@@ -227,13 +239,14 @@ public static class AdminCatalogEndpoints
 
             var row = await conn.QuerySingleAsync<Trip>(
                 """
-                INSERT INTO trips (title, origin_code, destination_code, planned_date, notes, transport_mode)
-                VALUES (@title, @origin, @destination, @planned, @notes, @mode)
+                INSERT INTO trips (title, origin_code, destination_code, planned_date, notes, transport_mode, courier_client_id)
+                VALUES (@title, @origin, @destination, @planned, @notes, @mode, @courier)
                 RETURNING id, title, origin_code AS OriginCode, destination_code AS DestinationCode,
                           planned_date AS PlannedDate, status, notes, created_at AS CreatedAt,
-                          transport_mode AS TransportMode
+                          transport_mode AS TransportMode, courier_client_id AS CourierClientId,
+                          (SELECT name FROM clients WHERE id = trips.courier_client_id) AS CourierName
                 """,
-                new { title, origin = req.OriginCode, destination = req.DestinationCode, planned = req.PlannedDate, notes = NullIfEmpty(req.Notes), mode = ModeOrDefault(req.TransportMode) });
+                new { title, origin = req.OriginCode, destination = req.DestinationCode, planned = req.PlannedDate, notes = NullIfEmpty(req.Notes), mode = ModeOrDefault(req.TransportMode), courier });
 
             await SaveStops(conn, row.Id, req.Stops);
             return Results.Created($"/api/admin/trips/{row.Id}", row);
@@ -245,6 +258,9 @@ public static class AdminCatalogEndpoints
                 return Bad("Trip status must be 'planned', 'completed' or 'cancelled'.");
 
             await using var conn = await db.OpenAsync(ct);
+            if (req.CourierClientId is { } courier && !await conn.ExecuteScalarAsync<bool>(
+                    "SELECT EXISTS (SELECT 1 FROM clients WHERE id = @courier)", new { courier }))
+                return Bad("Courier client does not exist.");
             var existing = await conn.QuerySingleOrDefaultAsync<(string? OriginCode, string? DestinationCode)>(
                 "SELECT origin_code, destination_code FROM trips WHERE id = @id", new { id });
             if (existing.OriginCode is null)
@@ -265,11 +281,13 @@ public static class AdminCatalogEndpoints
                     planned_date     = COALESCE(@planned, planned_date),
                     status           = COALESCE(@status, status),
                     notes            = COALESCE(@notes, notes),
-                    transport_mode   = COALESCE(@mode, transport_mode)
+                    transport_mode   = COALESCE(@mode, transport_mode),
+                    courier_client_id = COALESCE(@courier, courier_client_id)
                 WHERE id = @id
                 RETURNING id, title, origin_code AS OriginCode, destination_code AS DestinationCode,
                           planned_date AS PlannedDate, status, notes, created_at AS CreatedAt,
-                          transport_mode AS TransportMode
+                          transport_mode AS TransportMode, courier_client_id AS CourierClientId,
+                          (SELECT name FROM clients WHERE id = trips.courier_client_id) AS CourierName
                 """,
                 new
                 {
@@ -281,6 +299,7 @@ public static class AdminCatalogEndpoints
                     status = req.Status,
                     notes = req.Notes,
                     mode = req.TransportMode,
+                    courier = req.CourierClientId,
                 });
 
             if (row is null)
@@ -319,7 +338,7 @@ public static class AdminCatalogEndpoints
         });
 
         // Spawn one (or the mirrored return) trip from a prior-saved route template.
-        g.MapPost("/from-template/{templateId:long}", async (long templateId, InstantiateTripRequest req, Database db, CancellationToken ct) =>
+        g.MapPost("/from-template/{templateId:long}", async (long templateId, InstantiateTripRequest req, Database db, AdminIdentity identity, HttpContext http, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             var t = await conn.QuerySingleOrDefaultAsync<TripTemplate>(
@@ -334,10 +353,12 @@ public static class AdminCatalogEndpoints
             if (t.OriginCode is null || t.DestinationCode is null)
                 return Bad("Template needs both an origin and a destination to spawn trips.");
 
-            var created = new List<Trip> { await SpawnTrip(conn, t.Title, t.OriginCode, t.DestinationCode, t.Stops, t.TransportMode, req.PlannedDate) };
+            // Templates predate per-courier assignment; whoever spawns the trips travels them.
+            var courier = (await identity.ResolveAsync(conn, http.User))?.Id;
+            var created = new List<Trip> { await SpawnTrip(conn, t.Title, t.OriginCode, t.DestinationCode, t.Stops, t.TransportMode, req.PlannedDate, courier) };
             if (req.IncludeReturn)
                 created.Add(await SpawnTrip(conn, $"{t.Title} (return)", t.DestinationCode, t.OriginCode,
-                    t.Stops.Reverse().ToArray(), t.TransportMode, req.PlannedDate));
+                    t.Stops.Reverse().ToArray(), t.TransportMode, req.PlannedDate, courier));
 
             return Results.Created("/api/admin/trips", created);
         });
@@ -345,17 +366,18 @@ public static class AdminCatalogEndpoints
 
     private static async Task<Trip> SpawnTrip(
         Npgsql.NpgsqlConnection conn, string title, string origin, string destination,
-        string[] stops, string mode, DateTime? planned)
+        string[] stops, string mode, DateTime? planned, long? courier)
     {
         var row = await conn.QuerySingleAsync<Trip>(
             """
-            INSERT INTO trips (title, origin_code, destination_code, planned_date, transport_mode)
-            VALUES (@title, @origin, @destination, @planned, @mode)
+            INSERT INTO trips (title, origin_code, destination_code, planned_date, transport_mode, courier_client_id)
+            VALUES (@title, @origin, @destination, @planned, @mode, @courier)
             RETURNING id, title, origin_code AS OriginCode, destination_code AS DestinationCode,
                       planned_date AS PlannedDate, status, notes, created_at AS CreatedAt,
-                      transport_mode AS TransportMode
+                      transport_mode AS TransportMode, courier_client_id AS CourierClientId,
+                      (SELECT name FROM clients WHERE id = trips.courier_client_id) AS CourierName
             """,
-            new { title, origin, destination, planned, mode });
+            new { title, origin, destination, planned, mode, courier });
         await SaveStops(conn, row.Id, stops.ToList());
         return row;
     }
@@ -524,7 +546,8 @@ public static class AdminCatalogEndpoints
 
     public sealed record UpsertTripRequest(
         string? Title, string? OriginCode, string? DestinationCode, DateTime? PlannedDate,
-        string? Status, string? Notes, List<string>? Stops, string? TransportMode);
+        string? Status, string? Notes, List<string>? Stops, string? TransportMode,
+        long? CourierClientId = null);
 
     public sealed record InstantiateTripRequest(DateTime? PlannedDate, bool IncludeReturn);
 
