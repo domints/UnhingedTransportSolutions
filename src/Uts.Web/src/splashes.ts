@@ -1,6 +1,6 @@
 export const SPLASHES: string[] = [
   "Now with 0 (zero) depots!",
-  "Your mother was satisfied with our service"
+  "Your mother was satisfied with our service",
   "Also try not opening it early!",
   "Non-Euclidean! Non-refundable!",
   "Your parcel misses you already",
