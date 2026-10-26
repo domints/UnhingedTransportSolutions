@@ -27,6 +27,8 @@ export interface Trip {
   notes: string | null
   createdAt: string
   transportMode: string
+  courierClientId: number | null
+  courierName: string | null
 }
 
 export interface TripListItem extends Trip {
@@ -129,4 +131,21 @@ export interface AuthState {
   authenticated: boolean
   isAdmin: boolean
   name: string | null
+  clientId: number | null
+  clientName: string | null
+}
+
+/** Reply of GET /api/admin/identity. */
+export interface AdminIdentity {
+  sub: string | null
+  clientId: number | null
+  clientName: string | null
+  onboarded: boolean
+}
+
+/** Rows of the claim picker: clients not yet bound to any login. */
+export interface UnclaimedCourier {
+  id: number
+  name: string
+  contact: string | null
 }

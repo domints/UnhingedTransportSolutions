@@ -8,6 +8,7 @@ import ShipmentDetailView from '@/admin/ShipmentDetailView.vue'
 import ClientsView from '@/admin/ClientsView.vue'
 import CitiesView from '@/admin/CitiesView.vue'
 import TripsView from '@/admin/TripsView.vue'
+import OnboardingView from '@/admin/OnboardingView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -23,6 +24,7 @@ export const router = createRouter({
         { path: 'clients', name: 'admin-clients', component: ClientsView },
         { path: 'cities', name: 'admin-cities', component: CitiesView },
         { path: 'trips', name: 'admin-trips', component: TripsView },
+        { path: 'onboarding', name: 'admin-onboarding', component: OnboardingView },
       ],
     },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: NotFoundView },

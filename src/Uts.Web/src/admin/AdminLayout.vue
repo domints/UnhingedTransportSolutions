@@ -6,10 +6,12 @@
           <span class="brand__mark mono">UTS</span>
           <span class="brand__light">Transport Solutions</span>
         </RouterLink>
-        <RouterLink to="/admin">Shipments</RouterLink>
-        <RouterLink to="/admin/clients">Clients</RouterLink>
-        <RouterLink to="/admin/cities">Cities</RouterLink>
-        <RouterLink to="/admin/trips">Trips</RouterLink>
+        <template v-if="state?.clientId != null">
+          <RouterLink to="/admin">Shipments</RouterLink>
+          <RouterLink to="/admin/clients">Clients</RouterLink>
+          <RouterLink to="/admin/cities">Cities</RouterLink>
+          <RouterLink to="/admin/trips">Trips</RouterLink>
+        </template>
         <span class="adminbar__spacer"></span>
         <span v-if="state" class="adminbar__user">
           {{ state.name }}
@@ -60,9 +62,18 @@ onMounted(async () => {
       blocked.value = true
     }
     state.value = s
+
+    // Unmapped couriers go straight to onboarding ("who are you?"), mapped
+    // ones are bounced off it. Keeps the rest of the admin behind a claim.
+    if (s.isAdmin && s.clientId === null && router.currentRoute.value.path !== '/admin/onboarding') {
+      await router.replace('/admin/onboarding')
+    }
+    if (s.isAdmin && s.clientId !== null && router.currentRoute.value.path === '/admin/onboarding') {
+      await router.replace('/admin')
+    }
   } catch (e) {
     blocked.value = true
-    state.value = { authenticated: false, isAdmin: false, name: null }
+    state.value = { authenticated: false, isAdmin: false, name: null, clientId: null, clientName: null }
   } finally {
     loading.value = false
   }

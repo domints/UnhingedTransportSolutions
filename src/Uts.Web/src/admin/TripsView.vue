@@ -9,7 +9,7 @@
     <div class="card" style="overflow-x:auto">
       <table v-if="trips.length" class="table">
         <thead>
-          <tr><th>Trip</th><th>Route</th><th>Planned</th><th>Status</th><th>Mode</th><th>Shipments</th><th></th></tr>
+          <tr><th>Trip</th><th>Route</th><th>Planned</th><th>Status</th><th>Mode</th><th>Courier</th><th>Shipments</th><th></th></tr>
         </thead>
         <tbody>
           <tr v-for="t in trips" :key="t.id" @click="select(t)">
@@ -20,6 +20,7 @@
             <td class="small">{{ fmtDate(t.plannedDate) }}</td>
             <td><span class="badge" :class="'badge--' + tripBadge(t.status)">{{ tripStatusLabel(t.status) }}</span></td>
             <td>{{ modeIcon(t.transportMode) }}</td>
+            <td class="small">{{ t.courierName ?? '—' }}</td>
             <td><span class="chip">{{ t.shipmentCount }}</span></td>
             <td><button class="btn btn--sm" @click.stop="openEdit(t)">Edit</button></td>
           </tr>
@@ -140,6 +141,13 @@
               <option value="unknown">Unknown / both</option>
             </select>
           </div>
+          <div>
+            <label>Courier (who travels)</label>
+            <select v-model.number="editing.courierClientId">
+              <option :value="0">— nobody —</option>
+              <option v-for="courier in couriers" :key="courier.id" :value="courier.id">{{ courier.name }}</option>
+            </select>
+          </div>
         </div>
         <p v-if="error" class="callout callout--error small" style="margin-top:.8rem">{{ error }}</p>
         <div class="modal__actions">
@@ -228,7 +236,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api } from '@/api'
-import type { City, ShipmentListItem, Trip, TripListItem, TripTemplate } from '@/types'
+import type { AuthState, City, ShipmentListItem, Trip, TripListItem, TripTemplate } from '@/types'
 import { STATUS_LABELS, fmtDate, tripStatusLabel } from '@/format'
 import Modal from '@/components/Modal.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -237,8 +245,10 @@ const trips = ref<TripListItem[]>([])
 const cities = ref<City[]>([])
 const selected = ref<TripListItem | null>(null)
 const selectedShipments = ref<ShipmentListItem[]>([])
+const couriers = ref<{ id: number; name: string }[]>([])
+const me = ref<AuthState | null>(null)
 
-const editing = ref<TripEditForm>({ id: undefined, title: '', originCode: '', destinationCode: '', plannedDate: '', status: 'planned', notes: '', stops: [], transportMode: 'unknown' })
+const editing = ref<TripEditForm>({ id: undefined, title: '', originCode: '', destinationCode: '', plannedDate: '', status: 'planned', notes: '', stops: [], transportMode: 'unknown', courierClientId: 0 })
 const showEdit = ref(false)
 const pickOpen = ref(false)
 const candidates = ref<ShipmentListItem[]>([])
@@ -283,6 +293,8 @@ interface TripEditForm {
   notes: string
   stops: string[]
   transportMode: string
+  /** 0 = no courier; null is never stored here (the select uses 0 as "nobody"). */
+  courierClientId: number
 }
 
 const activeCities = computed(() => cities.value.filter((c) => c.active))
@@ -303,6 +315,8 @@ function tripBadge(status: string) {
 async function reload() {
   trips.value = await api.get<TripListItem[]>('/api/admin/trips')
   cities.value = await api.get<City[]>('/api/admin/cities')
+  couriers.value = await api.get<{ id: number; name: string }[]>('/api/admin/identity/couriers')
+  me.value = await api.get<AuthState>('/api/auth/state')
 }
 
 async function select(t: TripListItem) {
@@ -321,7 +335,7 @@ async function loadTripShipments() {
 }
 
 function openAdd() {
-  editing.value = { title: '', originCode: '', destinationCode: '', plannedDate: '', status: 'planned', notes: '', stops: [], transportMode: 'unknown' }
+  editing.value = { title: '', originCode: '', destinationCode: '', plannedDate: '', status: 'planned', notes: '', stops: [], transportMode: 'unknown', courierClientId: me.value?.clientId ?? 0 }
   error.value = ''
   showEdit.value = true
 }
@@ -337,6 +351,7 @@ function openEdit(t: TripListItem) {
     notes: t.notes ?? '',
     stops: [...t.stops],
     transportMode: t.transportMode || 'unknown',
+    courierClientId: t.courierClientId ?? 0,
   }
   error.value = ''
   showEdit.value = true
@@ -353,6 +368,9 @@ async function saveTrip() {
     notes: e.notes || null,
     stops: e.stops,
     transportMode: e.transportMode || 'unknown',
+    /* Sent as-is: the backend treats 0 as "no courier" (and as an explicit
+       clear on PUT), null would mean "don't change" there. */
+    courierClientId: e.courierClientId,
   }
   try {
     if (e.id) await api.put<Trip>(`/api/admin/trips/${e.id}`, payload)
