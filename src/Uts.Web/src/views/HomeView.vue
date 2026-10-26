@@ -2,7 +2,7 @@
   <div class="landing">
   <main class="container">
     <section class="hero">
-      <span class="hero__eyebrow">Now with 0 (zero) depots</span>
+      <span class="hero__eyebrow">{{ splash }}</span>
       <h1>Unhinged Transport Solutions</h1>
       <p class="hero__tag">
         Your parcel doesn't need a warehouse.<br />
@@ -51,10 +51,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { pickSplash } from '@/splashes'
 
 const router = useRouter()
 const number = ref('')
 const error = ref('')
+
+const splash = pickSplash()
 
 // Random 6-digit serial on every page load — otherwise the example number
 // looks like a real, existing shipment someone might try.
