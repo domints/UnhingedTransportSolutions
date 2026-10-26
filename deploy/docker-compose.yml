@@ -39,7 +39,9 @@ services:
       # --- Telegram bot (omit token = module off) ---
       TELEGRAM__BOTTOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM__SITEPUBLICURL: ${TELEGRAM_SITE_PUBLIC_URL:-}
-      TELEGRAM__COURIERCHATIDS: ${TELEGRAM_COURIER_CHAT_IDS:-}
+      # App-admin alerts (bruteforce, PIN regen) + legacy fallback for
+      # courier bot commands. The legacy name keeps old .env files working.
+      TELEGRAM__ADMINCHATIDS: ${TELEGRAM_ADMIN_CHAT_IDS:-${TELEGRAM_COURIER_CHAT_IDS:-}}
     ports:
       # bound to loopback — TLS termination is the reverse proxy's job;
       # if your proxy runs as another container on the same network, you can

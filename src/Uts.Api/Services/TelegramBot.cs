@@ -537,7 +537,7 @@ public sealed class TelegramBot(
                         m.ChatId, outcome.Error, unbound);
                 else
                     logger.LogWarning(
-                        "Telegram: chat {cid} is unreachable ({err}) and no client row carries it — courier chat id? Check TELEGRAM__COURIERCHATIDS.",
+                        "Telegram: chat {cid} is unreachable ({err}) and no client row carries it — courier chat id? Complete onboarding for this client (or add the chat id to TELEGRAM__ADMINCHATIDS).",
                         m.ChatId, outcome.Error);
             }
         }

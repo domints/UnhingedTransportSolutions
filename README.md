@@ -97,7 +97,7 @@ docker compose up -d --build
 | `AUTH_DEV_AUTH`        | DEV ONLY fake login endpoint — **never enable publicly**     |
 | `TELEGRAM__BOTTOKEN`   | BotFather token; omit to keep the bot module off             |
 | `TELEGRAM__SITEPUBLICURL` | Public base URL — tracking buttons in bot messages        |
-| `TELEGRAM__COURIERCHATIDS` | Comma-separated chat IDs allowed to run courier commands (`/leaving`, `/arrived`, `/deliver`, `/packlist`) |
+| `TELEGRAM__ADMINCHATIDS` | Comma-separated chat IDs that receive app-admin alerts (bruteforce, PIN regen). Doubles as the legacy fallback for courier bot commands; the old name `TELEGRAM__COURIERCHATIDS` still works if only that one is set. |
 
 ## Telegram bot
 
@@ -108,10 +108,35 @@ an outbox table (survives restarts, retried with backoff).
 Setup:
 1. Create a bot with [@BotFather](https://t.me/BotFather), copy the token into `TELEGRAM__BOTTOKEN`.
 2. Message the bot once and open `https://api.telegram.org/bot<TOKEN>/getUpdates` to read your
-   `chat.id` — put it into `TELEGRAM__COURIERCHATIDS` to unlock courier commands.
+   `chat.id` — put it into `TELEGRAM__ADMINCHATIDS` (alerts + legacy courier fallback).
 3. Clients bind their chat two ways: the admin panel (**Clients → TG claim**) or the public
    tracking page after PIN unlock (shows a one-click claim link when the recipient is unbound).
 4. Recipients can mute/unmute anytime with `/notifications` in the chat.
+
+### Courier commands: who may run them
+
+A chat may run courier commands (`/leaving`, `/arrived`, `/deliver`, `/packlist`) when **the client
+it is bound to carries a login** (`clients.auth_sub` — see below), i.e. the courier claimed
+themselves in the admin panel. Until then, chat ids on `TELEGRAM__ADMINCHATIDS` still work —
+a bridge between bot setup and the first panel onboarding; the env list is the fallback, the
+database is the source of truth.
+
+## Multi-courier
+
+`uts-admins` may contain several people; the app tracks **who actually travels**.
+
+- Each admin login maps to one **Client** row through the stable identity link `clients.auth_sub`
+  (the IdP `sub` claim), set via the claim flow. Being mapped means: the panel knows your name,
+  your chat id is already bound for courier commands, and other couriers can ship parcels **to**
+  you (couriers are clients too).
+- On first login without a mapping, the admin panel redirects to **/admin/onboarding**: claim one
+  of the still-unclaimed client rows ("that is me") or create a fresh one named after your IdP
+  display name. Nav stays hidden until you claimed.
+- **Trips remember their courier** (default = whoever creates them, editable in the trip form).
+- Recipient notifications name the courier: departure/digest pushes say
+  *"Kurier Marek wyrusza w trasę…"* — Polish copy lives in `TelegramTexts.cs` if you want to tweak it.
+- Any admin can **detach** a login from a client row (`POST /api/admin/identity/unclaim`) — e.g.
+  after a wrong pick; the affected person lands back in onboarding on next login.
 
 ## Authentik setup
 
@@ -149,7 +174,8 @@ Illegal transitions are rejected with a 409. Every change writes a timeline even
 Planned trips (origin, destination, date) act as dispatch buckets. Shipments are assigned to
 *planned* trips only; trip destination must match shipment destination. Assignments and
 reassignments are auto-logged on the public timeline. Completing or cancelling a trip releases
-its shipments back to "unscheduled".
+its shipments back to "unscheduled". Each trip carries a **courier** (the creator by default);
+their name rides along in the Telegram digests recipients get when the haul departs or arrives.
 
 ## API overview
 
