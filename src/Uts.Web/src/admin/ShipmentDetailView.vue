@@ -41,10 +41,6 @@
           <dd>{{ fmtDateTime(s.createdAt) }}</dd>
           <dt>Delivered</dt>
           <dd>{{ s.deliveredAt ? fmtDateTime(s.deliveredAt) : 'Pending' }}</dd>
-          <template v-if="s.notes">
-            <dt>Notes</dt>
-            <dd>{{ s.notes }}</dd>
-          </template>
         </dl>
       </div>
 
@@ -102,6 +98,21 @@
       </div>
 
       <div class="card">
+        <h2>Notes</h2>
+        <p class="muted small">
+          Internal, but shown to the recipient on the tracking page after unlocking.
+          Empty note means none.
+        </p>
+        <textarea v-model="notes" rows="3" style="width:100%; margin-bottom:.6rem"></textarea>
+        <div class="btnrow">
+          <button class="btn btn--primary" :disabled="!notesDirty || notesSaving" @click="saveNotes">
+            {{ notesSaving ? 'Saving…' : 'Save notes' }}
+          </button>
+          <span v-if="notesSaved" class="muted small" style="align-self:center">Saved ✓</span>
+        </div>
+      </div>
+
+      <div class="card">
         <h2>Timeline</h2>
         <div style="display:flex; gap:.5rem; margin-bottom:1rem">
           <input v-model="note" placeholder="Add a manual event — e.g. 'Transported via Regio, driverBlendon supervised'" @keyup.enter="addNote" />
@@ -132,8 +143,12 @@ const loading = ref(true)
 const statusError = ref('')
 const note = ref('')
 const tripChoice = ref(0)
+const notes = ref('')
+const notesSaving = ref(false)
+const notesSaved = ref(false)
 
 const plannedTrips = computed(() => trips.value.filter((t) => t.status === 'planned'))
+const notesDirty = computed(() => notes.value.trim() !== (s.value?.notes ?? '').trim())
 
 const DESTINATION_STYLES: Record<string, string> = {
   picked_up: 'btn--primary',
@@ -158,8 +173,23 @@ async function load() {
     s.value = await api.get<ShipmentDetail>(`/api/admin/shipments/${id}`)
     trips.value = await api.get<Trip[]>('/api/admin/trips')
     tripChoice.value = s.value.tripId ?? 0
+    notes.value = s.value.notes ?? ''
   } finally {
     loading.value = false
+  }
+}
+
+async function saveNotes() {
+  if (!s.value) return
+  notesSaving.value = true
+  try {
+    s.value = await api.post<ShipmentDetail>(`/api/admin/shipments/${id}/notes`, { notes: notes.value })
+    notesSaved.value = true
+    setTimeout(() => (notesSaved.value = false), 2000)
+  } catch (e) {
+    statusError.value = e instanceof Error ? e.message : 'Failed to save notes.'
+  } finally {
+    notesSaving.value = false
   }
 }
 

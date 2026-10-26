@@ -6,7 +6,7 @@ using Uts.Api.Services;
 
 namespace Uts.Api.Endpoints;
 
-/// <summary>Admin shipment management (list, create, status, trip, events, PIN).</summary>
+/// <summary>Admin shipment management (list, create, status, trip, events, notes, PIN).</summary>
 public static class AdminShipmentsEndpoints
 {
     public static void MapAdminShipments(this IEndpointRouteBuilder app)
@@ -288,6 +288,21 @@ public static class AdminShipmentsEndpoints
             return Results.Ok(detail);
         });
 
+        g.MapPost("/{id:long}/notes", async (long id, UpdateNotesRequest req, Database db, CancellationToken ct) =>
+        {
+            var notes = string.IsNullOrWhiteSpace(req.Notes) ? null : req.Notes.Trim();
+
+            await using var conn = await db.OpenAsync(ct);
+            if (!await conn.ExecuteScalarAsync<bool>(
+                    "SELECT EXISTS (SELECT 1 FROM shipments WHERE id = @id)", new { id }))
+                return Results.NotFound(new { error = "Shipment not found." });
+
+            await conn.ExecuteAsync(
+                "UPDATE shipments SET notes = @notes, updated_at = now() WHERE id = @id",
+                new { notes, id });
+            return Results.Ok(await LoadDetail(conn, id, ct));
+        });
+
         g.MapPost("/{id:long}/pin", async (long id, Database db, PinService pins, TelegramNotifier telegram, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
@@ -376,6 +391,8 @@ public static class AdminShipmentsEndpoints
     public sealed record TripAssignRequest(long? TripId);
 
     public sealed record ManualEventRequest(string Message);
+
+    public sealed record UpdateNotesRequest(string? Notes);
 
     private sealed record DetailRow(
         long Id,
