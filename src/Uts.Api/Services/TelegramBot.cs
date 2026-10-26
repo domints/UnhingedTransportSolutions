@@ -3,6 +3,7 @@ using System.Text.Json;
 using Dapper;
 using Microsoft.Extensions.Options;
 using Telegram.Bot;
+using Telegram.Bot.Exceptions;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.ReplyMarkups;
 using Uts.Api.Db;
@@ -55,6 +56,7 @@ public sealed class TelegramBot(
         logger.LogInformation("Telegram bot active as @{name}.", me.Username);
 
         var offset = 0;
+        var pollFailures = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -62,6 +64,7 @@ public sealed class TelegramBot(
                 await DrainOutboxAsync(bot, opts, stoppingToken);
 
                 var updates = await bot.GetUpdates(offset, timeout: 25, cancellationToken: stoppingToken);
+                pollFailures = 0;
                 foreach (var u in updates)
                 {
                     offset = (int)u.Id + 1;
@@ -81,8 +84,13 @@ public sealed class TelegramBot(
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Telegram: polling failure — retrying in 5 s.");
-                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                // Back off from a Telegram outage (5s → 60s), instead of
+                // retrying every loop second.
+                pollFailures++;
+                var delay = TimeSpan.FromSeconds(Math.Min(5 * Math.Pow(2, pollFailures - 1), 60));
+                logger.LogWarning(ex, "Telegram: polling failure #{n} — retrying in {s:N0} s.",
+                    pollFailures, delay.TotalSeconds);
+                await Task.Delay(delay, stoppingToken);
             }
         }
     }
@@ -452,31 +460,53 @@ public sealed class TelegramBot(
 
         foreach (var m in pending)
         {
-            var ok = long.TryParse(m.ChatId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var chatId)
-                     && await SendAsync(bot, chatId, m.Text, ParseKeyboard(m.KeyboardJson), ct);
-            if (ok)
+            var outcome = long.TryParse(m.ChatId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var chatId)
+                ? await SendAsync(bot, chatId, m.Text, ParseKeyboard(m.KeyboardJson), ct)
+                : new SendResult(false, false, $"bad chat id '{m.ChatId}'"); // permanent — garbage in the queue
+
+            if (outcome.Sent)
                 await conn.ExecuteAsync(
                     "UPDATE telegram_outbox SET sent_at = now(), last_attempt = now() WHERE id = @id", new { m.Id });
+            else if (outcome.Transient)
+                // Telegram-side / network hiccup: keep the attempt budget intact.
+                // The backoff gate below already prevents hammering; the message
+                // just waits until the next slot (60s * 2^attempts at the time
+                // of this attempt).
+                await conn.ExecuteAsync(
+                    "UPDATE telegram_outbox SET last_attempt = now(), last_error = @err WHERE id = @id",
+                    new { m.Id, err = outcome.Error });
             else
+                // Telegram rejected it (4xx) or unusable address — burn an attempt;
+                // after the 8-cap this message stops consuming drain cycles.
                 await conn.ExecuteAsync(
                     "UPDATE telegram_outbox SET last_attempt = now(), attempts = attempts + 1, last_error = @err WHERE id = @id",
-                    new { m.Id, err = "send failed" });
+                    new { m.Id, err = outcome.Error });
         }
     }
 
-    /// <summary>Send + swallow network/API errors (returns false → outbox marks
-    /// the attempt; retry cap and backoff live in the DB).</summary>
-    private async Task<bool> SendAsync(TelegramBotClient bot, long chatId, string text, InlineKeyboardMarkup? keyboard, CancellationToken ct)
+    private sealed record SendResult(bool Sent, bool Transient, string? Error);
+
+    /// <summary>Send + classify failures: transport problems and Telegram-side
+    /// 429/5xx are transient (retry forever, gated by backoff), 4xx rejections
+    /// are permanent (counts toward the retry cap).</summary>
+    private async Task<SendResult> SendAsync(TelegramBotClient bot, long chatId, string text, InlineKeyboardMarkup? keyboard, CancellationToken ct)
     {
         try
         {
             await bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
-            return true;
+            return new SendResult(true, true, null);
         }
-        catch (Exception ex)
+        catch (ApiRequestException ex)
         {
-            logger.LogWarning("Telegram: SendTextMessage failed ({msg}).", ex.Message);
-            return false;
+            var transient = ex.ErrorCode is 429 or >= 500;
+            logger.LogWarning("Telegram: send to {chatId} {verdict} ({code}): {msg}",
+                chatId, transient ? "rejected, will retry" : "rejected permanently", ex.ErrorCode, ex.Message);
+            return new SendResult(false, transient, $"telegram {ex.ErrorCode}: {ex.Message}");
+        }
+        catch (Exception ex) // HttpRequestException, timeouts, reset mid-body — transport-level, transient
+        {
+            logger.LogWarning("Telegram: send to {chatId} failed on transport: {msg}", chatId, ex.Message);
+            return new SendResult(false, true, ex.Message);
         }
     }
 
