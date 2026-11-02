@@ -143,7 +143,7 @@ if (openApiEnabled)
         options.AddOperationTransformer((operation, context, ct) =>
         {
             var desc = context.Description;
-            if (!desc.RelativePath.StartsWith("api/admin/", StringComparison.Ordinal))
+            if ((!desc.RelativePath?.StartsWith("api/admin/", StringComparison.Ordinal)) ?? true)
                 return Task.CompletedTask;
 
             var metadata = desc.ActionDescriptor.EndpointMetadata;
@@ -170,7 +170,7 @@ if (openApiEnabled)
             {
                 operation.Description = (operation.Description is { } d ? d + " " : "")
                     + $"API keys require the '{perm}' permission.";
-                operation.Extensions.Add("x-permission", new JsonNodeExtension(perm));
+                operation.Extensions?.Add("x-permission", new JsonNodeExtension(perm));
             }
 
             return Task.CompletedTask;
