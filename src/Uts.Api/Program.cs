@@ -130,6 +130,7 @@ if (openApiEnabled)
         options.AddDocumentTransformer((doc, context, ct) =>
         {
             doc.Components ??= new OpenApiComponents();
+            doc.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
             doc.Components.SecuritySchemes["ApiKey"] = new OpenApiSecurityScheme
             {
                 Type = SecuritySchemeType.Http,
