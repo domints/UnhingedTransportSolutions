@@ -23,7 +23,7 @@ public static class ApiKeyEndpoints
 
     public static void MapApiKeys(this IEndpointRouteBuilder app)
     {
-        var g = app.MapGroup("/api/admin/keys").AddEndpointFilter<AdminFilter>();
+        var g = app.MapGroup("/api/admin/keys").AddEndpointFilter<AdminFilter>().ExcludeFromDescription();
 
         // Own keys only — newest first, prefix stands in for the secret.
         g.MapGet("/", [AdminKeysOnly] async (HttpContext http, Database db, CancellationToken ct) =>
