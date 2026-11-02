@@ -192,7 +192,7 @@ public static class AdminCatalogEndpoints
                 FROM trips t
                 LEFT JOIN clients cc ON cc.id = t.courier_client_id
                 {filter}
-                ORDER BY t.planned_date ASC NULLS LAST,
+                ORDER BY t.planned_date DESC NULLS LAST,
                          t.created_at DESC
                 """,
                 new { st })).AsList();
