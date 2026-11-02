@@ -30,7 +30,7 @@ public static class AuthEndpoints
                 return Results.Text($"Could not reach the identity provider: {e.Message}",
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
-        });
+        }).ExcludeFromDescription();
 
         app.MapGet("/signin/uts", async (OidcService oidc, HttpContext http, string? code, string? state) =>
         {
@@ -40,13 +40,13 @@ public static class AuthEndpoints
 
             await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
             return Results.Redirect("/admin");
-        });
+        }).ExcludeFromDescription();
 
         app.MapGet("/auth/logout", (HttpContext http) =>
         {
             var props = new AuthenticationProperties { RedirectUri = "/" };
             return Results.SignOut(props, [CookieAuthenticationDefaults.AuthenticationScheme]);
-        });
+        }).ExcludeFromDescription();
 
         app.MapGet("/api/auth/state", async (HttpContext http, AdminIdentity identity, CancellationToken ct) =>
         {
@@ -73,7 +73,7 @@ public static class AuthEndpoints
                 // the SPA uses this to gate on /admin/onboarding.
                 clientName = client?.Name,
             });
-        });
+        }).ExcludeFromDescription();
     }
 }
 

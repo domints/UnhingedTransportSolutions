@@ -144,7 +144,7 @@ if (openApiEnabled)
         options.AddOperationTransformer((operation, context, ct) =>
         {
             var desc = context.Description;
-            if ((!desc.RelativePath?.StartsWith("api/admin/", StringComparison.Ordinal)) ?? true)
+            if (desc.RelativePath == null || !desc.RelativePath.StartsWith("api/admin/", StringComparison.Ordinal))
                 return Task.CompletedTask;
 
             var metadata = desc.ActionDescriptor.EndpointMetadata;
