@@ -17,7 +17,7 @@ public static class AdminIdentityEndpoints
 {
     public static void MapAdminIdentity(this WebApplication app)
     {
-        var g = app.MapGroup("/api/admin/identity").AddEndpointFilter<AdminFilter>();
+        var g = app.MapGroup("/api/admin/identity").AddEndpointFilter<AdminFilter>().ExcludeFromDescription();
 
         // Who am I? (sub, claim state — the SPA asks before/after onboarding)
         g.MapGet("/", async (AdminIdentity identity, HttpContext http, CancellationToken ct) =>
