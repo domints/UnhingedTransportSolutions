@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json.Nodes;
 using Dapper;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -6,8 +7,11 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using System.Threading.RateLimiting;
+using Microsoft.OpenApi;
+using Swashbuckle.AspNetCore.SwaggerUI;
 using Uts.Api.Db;
 using Uts.Api.Endpoints;
+using Uts.Api.Http;
 using Uts.Api.Services;
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -47,16 +51,20 @@ builder.Services.AddHostedService<TelegramBot>();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    // Someone is hammering the unlock endpoint — surface it to the courier's Telegram.
     options.OnRejected = async (context, token) =>
     {
-        var number = context.HttpContext.Request.RouteValues["number"]?.ToString() ?? "a tracking number";
-        var notifier = context.HttpContext.RequestServices.GetRequiredService<TelegramNotifier>();
-        try
+        // Every rejected request gets a Retry-After so scripts can back off politely.
+        context.HttpContext.Response.Headers.RetryAfter = "60";
+        // Someone is hammering the unlock endpoint — surface it to the courier's Telegram.
+        if (context.HttpContext.Request.RouteValues["number"] is not null)
         {
-            await notifier.EnqueueAdminAsync($"🚨 Too many wrong access-code attempts for {number}. Possible brute-force.");
+            var notifier = context.HttpContext.RequestServices.GetRequiredService<TelegramNotifier>();
+            try
+            {
+                await notifier.EnqueueAdminAsync($"🚨 Too many wrong access-code attempts for {context.HttpContext.Request.RouteValues["number"]}. Possible brute-force.");
+            }
+            catch { /* alerts must never break the response */ }
         }
-        catch { /* alerts must never break the response */ }
         await Task.CompletedTask;
     };
     options.AddPolicy("pin-unlock", httpContext =>
@@ -67,6 +75,29 @@ builder.Services.AddRateLimiter(options =>
                 PermitLimit = 5,
                 Window = TimeSpan.FromMinutes(10),
             }));
+    // Global per-IP limit, generous enough that real traffic never sees a 429.
+    // A presented-but-unresolved API key (Items set by ApiKeyMiddleware) lands
+    // in a much tighter partition that throttles token guessing.
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
+    {
+        var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return httpContext.Items.ContainsKey(ApiKeyMiddleware.ItemKeyAuthFailed)
+            ? RateLimitPartition.GetFixedWindowLimiter(
+                $"{ip}|key-guess",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 10,
+                    Window = TimeSpan.FromMinutes(1),
+                })
+            : RateLimitPartition.GetSlidingWindowLimiter(
+                ip,
+                _ => new SlidingWindowRateLimiterOptions
+                {
+                    PermitLimit = 120,
+                    Window = TimeSpan.FromMinutes(1),
+                    SegmentsPerWindow = 6,
+                });
+    });
 });
 
 builder.Services
@@ -85,6 +116,67 @@ builder.Services
     });
 
 builder.Services.AddAuthorization();
+
+// OpenAPI document (/openapi/v1.json) + Swagger UI (/swagger).
+// On in Development; elsewhere only via `OpenApi:Enabled=true` (OPENAPI__ENABLED).
+var openApiEnabled = builder.Environment.IsDevelopment() || cfg.GetValue<bool>("OpenApi:Enabled");
+if (openApiEnabled)
+{
+    builder.Services.AddOpenApi(options =>
+    {
+        // The document is the integration contract — it must tell script authors
+        // that admin routes accept an API key (the route list + per-route
+        // permission comes from the operation transformer below).
+        options.AddDocumentTransformer((doc, context, ct) =>
+        {
+            doc.Components ??= new OpenApiComponents();
+            doc.Components.SecuritySchemes["ApiKey"] = new OpenApiSecurityScheme
+            {
+                Type = SecuritySchemeType.Http,
+                Scheme = "bearer",
+                BearerFormat = "uts_sk",
+                Description = "API key minted in the admin panel (uts_sk_…). " +
+                              "Key management and identity endpoints accept cookie sessions only.",
+            };
+            return Task.CompletedTask;
+        });
+        options.AddOperationTransformer((operation, context, ct) =>
+        {
+            var desc = context.Description;
+            if (!desc.RelativePath.StartsWith("api/admin/", StringComparison.Ordinal))
+                return Task.CompletedTask;
+
+            var metadata = desc.ActionDescriptor.EndpointMetadata;
+            var perm = metadata.OfType<AdminPermAttribute>().FirstOrDefault()?.Perm;
+            var keyable = perm is not null
+                          && !metadata.OfType<AdminKeysOnlyAttribute>().Any();
+
+            if (keyable)
+            {
+                // "admin session OR key with <perm>" — one requirement, one scheme.
+                operation.Security ??= [];
+                operation.Security.Add(new OpenApiSecurityRequirement
+                {
+                    [new OpenApiSecuritySchemeReference("ApiKey", context.Document)] = new List<string>(),
+                });
+            }
+            else
+            {
+                operation.Description = (operation.Description is { } d ? d + " " : "")
+                    + "Authentication: admin cookie session only — API keys are not accepted.";
+            }
+
+            if (perm is not null)
+            {
+                operation.Description = (operation.Description is { } d ? d + " " : "")
+                    + $"API keys require the '{perm}' permission.";
+                operation.Extensions.Add("x-permission", new JsonNodeExtension(perm));
+            }
+
+            return Task.CompletedTask;
+        });
+    });
+}
 
 var app = builder.Build();
 
@@ -110,7 +202,22 @@ if (cfg.GetValue<bool>("Auth:BehindProxy"))
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
+
+// Swagger UI at /swagger, rendering the built-in OpenAPI document.
+if (openApiEnabled)
+{
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/openapi/v1.json", "UTS API v1");
+        options.DocumentTitle = "UTS API";
+    });
+}
+
 app.UseAuthentication();
+
+// Bearer uts_sk_… API keys (cookie session always wins — see middleware).
+app.UseMiddleware<ApiKeyMiddleware>();
+
 app.UseRateLimiter();
 
 // Local-only fake login so the app is testable without an identity provider.
@@ -159,6 +266,12 @@ app.MapTrackEndpoints();
 app.MapAdminShipments();
 app.MapAdminCatalog();
 app.MapAdminIdentity();
+app.MapApiKeys();
+
+if (openApiEnabled)
+{
+    app.MapOpenApi(); // /openapi/v1.json
+}
 
 app.MapFallback("/api/{**path}", () => Results.Json(new { error = "not_found" },
     statusCode: StatusCodes.Status404NotFound));

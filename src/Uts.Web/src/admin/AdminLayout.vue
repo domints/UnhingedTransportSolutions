@@ -11,6 +11,7 @@
           <RouterLink to="/admin/clients">Clients</RouterLink>
           <RouterLink to="/admin/cities">Cities</RouterLink>
           <RouterLink to="/admin/trips">Trips</RouterLink>
+          <RouterLink to="/admin/keys">API keys</RouterLink>
         </template>
         <span class="adminbar__spacer"></span>
         <span v-if="state" class="adminbar__user">

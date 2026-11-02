@@ -149,3 +149,35 @@ export interface UnclaimedCourier {
   name: string
   contact: string | null
 }
+
+/* The eight grantable API-key permissions (names.* beyond these — keys.*
+ * above all — can never be granted). */
+export type ApiKeyPermission =
+  | 'shipments.read'
+  | 'shipments.write'
+  | 'clients.read'
+  | 'clients.write'
+  | 'trips.read'
+  | 'trips.write'
+  | 'cities.read'
+  | 'cities.write'
+
+export interface ApiKeyRow {
+  id: number
+  name: string
+  keyPrefix: string
+  permissions: ApiKeyPermission[]
+  createdAt: string
+  lastUsedAt: string | null
+  revokedAt: string | null
+}
+
+/** Reply of POST /api/admin/keys — the full key is here exactly once. */
+export interface ApiKeyCreated {
+  key: string
+  id: number
+  name: string
+  keyPrefix: string
+  permissions: ApiKeyPermission[]
+  createdAt: string
+}

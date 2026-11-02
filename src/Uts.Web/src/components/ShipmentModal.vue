@@ -4,7 +4,7 @@
       <div class="card" style="margin-bottom:1rem">
         <div class="toolbar" style="margin-bottom:0">
           <label style="margin:0">Sender</label>
-          <button type="button" class="btn btn--sm" @click="newSender.open = !newSender.open">+ New client</button>
+          <button type="button" class="btn btn--sm" title="The client is missing from the list? Add one here without leaving the form" @click="newSender.open = !newSender.open">+ New client</button>
         </div>
         <select v-model.number="form.senderId" required>
           <option v-for="c in clients" :key="c.id" :value="c.id">{{ c.name }}</option>
@@ -12,14 +12,14 @@
           <input v-model="newSender.name" placeholder="Name *" />
           <input v-model="newSender.contact" placeholder="Contact (phone, party registered address…)" style="margin-top:.4rem" />
           <input v-model="newSender.telegramChatId" class="mono" placeholder="Telegram chat ID (for future bot)" style="margin-top:.4rem" />
-          <button type="button" class="btn btn--sm" style="margin-top:.5rem" :disabled="!newSender.name" @click="createClient('sender')">Save client</button>
+          <button type="button" class="btn btn--sm" style="margin-top:.5rem" title="Create the client record and select it as the sender" :disabled="!newSender.name" @click="createClient('sender')">Save client</button>
         </div>
       </div>
 
       <div class="card" style="margin-bottom:1rem">
         <div class="toolbar" style="margin-bottom:0">
           <label style="margin:0">Recipient</label>
-          <button type="button" class="btn btn--sm" @click="newRecipient.open = !newRecipient.open">+ New client</button>
+          <button type="button" class="btn btn--sm" title="The client is missing from the list? Add one here without leaving the form" @click="newRecipient.open = !newRecipient.open">+ New client</button>
         </div>
         <select v-model.number="form.recipientId" required>
           <option v-for="c in clients" :key="c.id" :value="c.id">{{ c.name }}</option>
@@ -28,7 +28,7 @@
           <input v-model="newRecipient.name" placeholder="Name *" />
           <input v-model="newRecipient.contact" placeholder="Contact" style="margin-top:.4rem" />
           <input v-model="newRecipient.telegramChatId" class="mono" placeholder="Telegram chat ID (for future bot)" style="margin-top:.4rem" />
-          <button type="button" class="btn btn--sm" style="margin-top:.5rem" :disabled="!newRecipient.name" @click="createClient('recipient')">Save client</button>
+          <button type="button" class="btn btn--sm" style="margin-top:.5rem" title="Create the client record and select it as the recipient" :disabled="!newRecipient.name" @click="createClient('recipient')">Save client</button>
         </div>
       </div>
 
@@ -51,9 +51,9 @@
       <textarea v-model="form.description" required placeholder="e.g. 1 box of home-made preserves, fragile, smells heavenly" />
       <label>Transport feasibility</label>
       <div class="btnrow">
-        <button type="button" class="btn" :class="form.transportMode === 'train' ? 'btn--primary' : 'btn--ghost'" @click="form.transportMode = 'train'">🚂 Train OK</button>
-        <button type="button" class="btn" :class="form.transportMode === 'car' ? 'btn--primary' : 'btn--ghost'" @click="form.transportMode = 'car'">🚗 Needs car</button>
-        <button type="button" class="btn" :class="form.transportMode === 'unknown' ? 'btn--primary' : 'btn--ghost'" @click="form.transportMode = 'unknown'">🤷 Unknown</button>
+        <button type="button" class="btn" title="Fine for normal rail &amp; urban transport" :class="form.transportMode === 'train' ? 'btn--primary' : 'btn--ghost'" @click="form.transportMode = 'train'">🚂 Train OK</button>
+        <button type="button" class="btn" title="Too big / heavy for the train — only car trips qualify" :class="form.transportMode === 'car' ? 'btn--primary' : 'btn--ghost'" @click="form.transportMode = 'car'">🚗 Needs car</button>
+        <button type="button" class="btn" title="No preference — trips of any mode can pick it up" :class="form.transportMode === 'unknown' ? 'btn--primary' : 'btn--ghost'" @click="form.transportMode = 'unknown'">🤷 Unknown</button>
       </div>
       <label>Internal notes</label>
       <input v-model="form.notes" placeholder="optional" />
@@ -62,7 +62,7 @@
 
       <div class="modal__actions">
         <button type="button" class="btn" @click="emit('close')">Cancel</button>
-        <button type="submit" class="btn btn--primary" :disabled="busy || !form.senderId || !form.recipientId || !form.description">
+        <button type="submit" class="btn btn--primary" title="Register the parcel — you'll get a tracking number and a one-time access code" :disabled="busy || !form.senderId || !form.recipientId || !form.description">
           {{ busy ? 'Registering…' : 'Create shipment' }}
         </button>
       </div>

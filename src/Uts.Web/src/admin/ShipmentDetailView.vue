@@ -52,6 +52,7 @@
             :key="next"
             class="btn"
             :class="destinationClass(next)"
+            :title="'Move this shipment to “' + statusLabel(next) + '”'"
             @click="changeStatus(next)"
           >
             {{ statusLabel(next) }}
@@ -72,10 +73,10 @@
               </option>
             </select>
           </div>
-          <button class="btn btn--primary" :disabled="tripChoice === (s.tripId ?? 0)" @click="assignTrip">
+          <button class="btn btn--primary" :title="s.tripId ? 'Move the shipment to the trip selected above' : 'Put the shipment on the trip selected above'" :disabled="tripChoice === (s.tripId ?? 0)" @click="assignTrip">
             {{ s.tripId ? 'Reassign' : 'Assign' }}
           </button>
-          <button v-if="s.tripId" class="btn btn--danger" @click="removeTrip">Remove from trip</button>
+          <button v-if="s.tripId" class="btn btn--danger" title="Take the shipment off its trip — the shipment itself stays untouched" @click="removeTrip">Remove from trip</button>
         </div>
         <p v-if="s.tripStatus" class="muted small" style="margin-top:.5rem">
           Current trip: <strong>{{ s.tripTitle }}</strong> ({{ tripStatusLabel(s.tripStatus) }})
@@ -90,10 +91,10 @@
           <button type="button" @click="copy(s.pin)">copy</button>
         </p>
         <div class="btnrow">
-          <button class="btn" @click="copyLink">
+          <button class="btn" title="Copy the public tracking URL to the clipboard" @click="copyLink">
             {{ linkCopied ? 'Tracking link copied ✓' : 'Copy tracking link' }}
           </button>
-          <button class="btn" @click="regeneratePin">Generate new access code</button>
+          <button class="btn" title="Invalidates the current six-digit code and generates a fresh one" @click="regeneratePin">Generate new access code</button>
         </div>
       </div>
 
@@ -116,7 +117,7 @@
         <h2>Timeline</h2>
         <div style="display:flex; gap:.5rem; margin-bottom:1rem">
           <input v-model="note" placeholder="Add a manual event — e.g. 'Transported via Regio, driverBlendon supervised'" @keyup.enter="addNote" />
-          <button class="btn" :disabled="!note.trim()" @click="addNote">Add event</button>
+          <button class="btn" title="Append this note to the shipment's timeline" :disabled="!note.trim()" @click="addNote">Add event</button>
         </div>
         <Timeline :events="s.events" />
       </div>

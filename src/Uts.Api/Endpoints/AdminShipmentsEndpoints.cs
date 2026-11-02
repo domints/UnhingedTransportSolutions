@@ -13,7 +13,7 @@ public static class AdminShipmentsEndpoints
     {
         var g = app.MapGroup("/api/admin/shipments").AddEndpointFilter<AdminFilter>();
 
-        g.MapGet("/", async (Database db, string? status, string? city, long? clientId, string? tripId, string? q,
+        g.MapGet("/", [AdminPerm(Perm.ShipmentsRead)] async (Database db, string? status, string? city, long? clientId, string? tripId, string? q,
             CancellationToken ct) =>
         {
             var conditions = new List<string>();
@@ -88,7 +88,7 @@ public static class AdminShipmentsEndpoints
             return Results.Ok(rows);
         });
 
-        g.MapPost("/", async (CreateShipmentRequest req, Database db, NumberService numbers, PinService pins,
+        g.MapPost("/", [AdminPerm(Perm.ShipmentsWrite)] async (CreateShipmentRequest req, Database db, NumberService numbers, PinService pins,
             TelegramNotifier telegram, CancellationToken ct) =>
         {
             var description = req.Description?.Trim();
@@ -165,14 +165,14 @@ public static class AdminShipmentsEndpoints
             return Results.Created($"/api/admin/shipments/{created.Id}", new { pin, shipment = detail });
         });
 
-        g.MapGet("/{id:long}", async (long id, Database db, CancellationToken ct) =>
+        g.MapGet("/{id:long}", [AdminPerm(Perm.ShipmentsRead)] async (long id, Database db, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             var detail = await LoadDetail(conn, id, ct);
             return detail is null ? Results.NotFound(new { error = "Shipment not found." }) : Results.Ok(detail);
         });
 
-        g.MapPost("/{id:long}/status", async (long id, StatusChangeRequest req, Database db, TelegramNotifier telegram, CancellationToken ct) =>
+        g.MapPost("/{id:long}/status", [AdminPerm(Perm.ShipmentsWrite)] async (long id, StatusChangeRequest req, Database db, TelegramNotifier telegram, CancellationToken ct) =>
         {
             var to = req.Status?.Trim() ?? "";
             if (!ShipmentStatus.All.Contains(to))
@@ -209,7 +209,7 @@ public static class AdminShipmentsEndpoints
             return Results.Ok(detail);
         });
 
-        g.MapPost("/{id:long}/trip", async (long id, TripAssignRequest req, Database db, CancellationToken ct) =>
+        g.MapPost("/{id:long}/trip", [AdminPerm(Perm.ShipmentsWrite)] async (long id, TripAssignRequest req, Database db, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
 
@@ -270,7 +270,7 @@ public static class AdminShipmentsEndpoints
             return Results.Ok(detail);
         });
 
-        g.MapPost("/{id:long}/events", async (long id, ManualEventRequest req, Database db, CancellationToken ct) =>
+        g.MapPost("/{id:long}/events", [AdminPerm(Perm.ShipmentsWrite)] async (long id, ManualEventRequest req, Database db, CancellationToken ct) =>
         {
             var message = req.Message?.Trim();
             if (string.IsNullOrEmpty(message))
@@ -288,7 +288,7 @@ public static class AdminShipmentsEndpoints
             return Results.Ok(detail);
         });
 
-        g.MapPost("/{id:long}/notes", async (long id, UpdateNotesRequest req, Database db, TelegramNotifier telegram, CancellationToken ct) =>
+        g.MapPost("/{id:long}/notes", [AdminPerm(Perm.ShipmentsWrite)] async (long id, UpdateNotesRequest req, Database db, TelegramNotifier telegram, CancellationToken ct) =>
         {
             var notes = string.IsNullOrWhiteSpace(req.Notes) ? null : req.Notes.Trim();
 
@@ -318,7 +318,7 @@ public static class AdminShipmentsEndpoints
             return Results.Ok(await LoadDetail(conn, id, ct));
         });
 
-        g.MapPost("/{id:long}/pin", async (long id, Database db, PinService pins, TelegramNotifier telegram, CancellationToken ct) =>
+        g.MapPost("/{id:long}/pin", [AdminPerm(Perm.ShipmentsWrite)] async (long id, Database db, PinService pins, TelegramNotifier telegram, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             if (!await conn.ExecuteScalarAsync<bool>(

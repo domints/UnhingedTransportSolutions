@@ -20,8 +20,8 @@
             </td>
             <td class="small">{{ c.notes || '—' }}</td>
             <td style="white-space:nowrap">
-              <button class="btn btn--sm" @click="generateClaim(c)">TG claim</button>
-              <button class="btn btn--sm" @click="openEdit(c)">Edit</button>
+              <button class="btn btn--sm" title="Generate a one-time code the client sends to the bot (/start <code>) to link their Telegram" @click="generateClaim(c)">TG claim</button>
+              <button class="btn btn--sm" title="Edit name, contact, Telegram chat ID or notes" @click="openEdit(c)">Edit</button>
             </td>
           </tr>
         </tbody>

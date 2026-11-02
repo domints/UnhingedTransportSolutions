@@ -15,7 +15,7 @@
           <label style="margin-top:0">Name</label>
           <input v-model="newName" placeholder="e.g. Wrocław" @keyup.enter="add" />
         </div>
-        <button class="btn btn--primary" :disabled="!newCode || !newName" @click="add">Add</button>
+        <button class="btn btn--primary" title="Create the client record" :disabled="!newCode || !newName" @click="add">Add</button>
       </div>
       <p v-if="error" class="callout callout--error small" style="margin:.8rem 0 0">{{ error }}</p>
     </div>
@@ -31,7 +31,7 @@
             <td>
               <span v-if="editing === c.code" style="display:flex; gap:.4rem">
                 <input v-model="editName" @keyup.enter="saveName(c)" />
-                <button class="btn btn--sm" @click="saveName(c)">Save</button>
+                <button class="btn btn--sm" title="Save the new name" @click="saveName(c)">Save</button>
               </span>
               <template v-else>{{ c.name }}</template>
             </td>
@@ -46,7 +46,7 @@
               </button>
             </td>
             <td>
-              <button v-if="editing !== c.code" class="btn btn--sm" @click="startRename(c)">Rename</button>
+              <button v-if="editing !== c.code" class="btn btn--sm" title="Change the city's display name — the 3-letter code is permanent" @click="startRename(c)">Rename</button>
             </td>
           </tr>
         </tbody>

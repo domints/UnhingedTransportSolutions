@@ -22,7 +22,7 @@
               <td><strong>{{ c.name }}</strong></td>
               <td class="small muted">{{ c.contact ?? '' }}</td>
               <td style="white-space:nowrap">
-                <button class="btn btn--sm btn--primary" @click="claim(c.id)">That is me</button>
+                <button class="btn btn--sm btn--primary" title="Bind your staff login to this client record — you become its courier" @click="claim(c.id)">That is me</button>
               </td>
             </tr>
           </tbody>
@@ -37,7 +37,7 @@
             <label style="margin-top:.8rem">Your name (as parcels should address you)</label>
             <input v-model="newName" required :placeholder="defaultName" />
             <div class="modal__actions" style="margin-top:.8rem">
-              <button type="submit" class="btn btn--primary" :disabled="!newName.trim()">Create &amp; claim</button>
+              <button type="submit" class="btn btn--primary" title="Create a new client record and bind your login to it" :disabled="!newName.trim()">Create &amp; claim</button>
             </div>
           </template>
         </form>

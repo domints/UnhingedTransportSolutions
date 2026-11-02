@@ -2,8 +2,8 @@
   <main class="container">
     <div class="toolbar">
       <h1 style="font-size:1.4rem; color:var(--navy); margin:0">Planned trips</h1>
-      <button class="btn" @click="openTemplates">🕘 Templates</button>
-      <button class="btn btn--primary" @click="openAdd">+ New trip</button>
+      <button class="btn" title="Manage recurring route templates and spawn trips from them" @click="openTemplates">🕘 Templates</button>
+      <button class="btn btn--primary" title="Plan a new trip: route, date, transport mode and courier" @click="openAdd">+ New trip</button>
     </div>
 
     <div class="card" style="overflow-x:auto">
@@ -22,7 +22,7 @@
             <td>{{ modeIcon(t.transportMode) }}</td>
             <td class="small">{{ t.courierName ?? '—' }}</td>
             <td><span class="chip">{{ t.shipmentCount }}</span></td>
-            <td><button class="btn btn--sm" @click.stop="openEdit(t)">Edit</button></td>
+            <td><button class="btn btn--sm" title="Change route, date, status, mode or courier" @click.stop="openEdit(t)">Edit</button></td>
           </tr>
         </tbody>
       </table>
@@ -47,7 +47,7 @@
             <td>{{ s.recipientName }}</td>
             <td style="max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ s.description }}</td>
             <td><StatusBadge :status="s.status" /></td>
-            <td><button class="btn btn--sm btn--danger" @click="unassign(s)">Unassign</button></td>
+            <td><button class="btn btn--sm btn--danger" title="Take the shipment off this trip — the shipment itself stays untouched" @click="unassign(s)">Unassign</button></td>
           </tr>
         </tbody>
       </table>
@@ -58,13 +58,23 @@
       </p>
 
       <div class="toolbar" style="margin-top:1rem">
-        <button class="btn btn--primary" :disabled="!selectedShipments.length" @click="bulkMark('in_transit')">
+        <button
+          class="btn btn--primary"
+          title="Marks every shipment on this trip as 'in transit' and sends departure notifications to recipients"
+          :disabled="!selectedShipments.length"
+          @click="bulkMark('in_transit')"
+        >
           🚆 Leaving — mark all in transit
         </button>
-        <button class="btn btn--primary" :disabled="!selectedShipments.length" @click="bulkMark('at_destination')">
+        <button
+          class="btn btn--primary"
+          title="Marks every shipment on this trip as 'at destination' and completes the trip"
+          :disabled="!selectedShipments.length"
+          @click="bulkMark('at_destination')"
+        >
           📍 Arrived — mark all at destination
         </button>
-        <button class="btn" style="margin-left:auto" @click="pickOpen = true; showCandidates()">+ Add shipment to trip</button>
+        <button class="btn" style="margin-left:auto" title="Pick an unassigned shipment with a matching destination" @click="pickOpen = true; showCandidates()">+ Add shipment to trip</button>
       </div>
     </div>
 
@@ -80,7 +90,7 @@
             <td class="mono">{{ s.trackingNumber }}</td>
             <td class="mono">{{ s.destinationCode }}</td>
             <td><StatusBadge :status="s.status" /></td>
-            <td><button class="btn btn--sm" @click="assign(s)">Assign</button></td>
+            <td><button class="btn btn--sm" title="Put this shipment on the selected trip" @click="assign(s)">Assign</button></td>
           </tr>
         </tbody>
       </table>
@@ -171,15 +181,15 @@
             <td>{{ modeIcon(tpl.transportMode) }}</td>
             <td><input v-model="tplPlannedDate" type="date" style="min-width:130px" /></td>
             <td style="white-space:nowrap">
-              <button class="btn btn--sm btn--primary" @click="createFromTemplate(tpl, false)">Trip</button>
-              <button class="btn btn--sm" @click="createFromTemplate(tpl, true)">+ return</button>
-              <button class="btn btn--sm" @click="openTemplateEdit(tpl)">Edit</button>
-              <button class="btn btn--sm btn--danger" @click="deleteTemplate(tpl)">Delete</button>
+              <button class="btn btn--sm btn--primary" title="Create a one-way trip from this template for the date on the right" @click="createFromTemplate(tpl, false)">Trip</button>
+              <button class="btn btn--sm" title="Create the trip plus its return leg (destinations swapped)" @click="createFromTemplate(tpl, true)">+ return</button>
+              <button class="btn btn--sm" title="Change title, route, stops or transport mode" @click="openTemplateEdit(tpl)">Edit</button>
+              <button class="btn btn--sm btn--danger" title="Delete this template — existing trips are kept" @click="deleteTemplate(tpl)">Delete</button>
             </td>
           </tr>
         </tbody>
       </table>
-      <button class="btn" style="margin-top:1rem" @click="openTemplateEdit(null)">+ New template</button>
+      <button class="btn" style="margin-top:1rem" title="Save a recurring route as a new template" @click="openTemplateEdit(null)">+ New template</button>
       <p v-if="tplCreated" class="callout callout--ok small" style="margin-top:.8rem">{{ tplCreated }}</p>
       <p v-if="tplError" class="callout callout--error small" style="margin-top:.8rem">{{ tplError }}</p>
     </Modal>

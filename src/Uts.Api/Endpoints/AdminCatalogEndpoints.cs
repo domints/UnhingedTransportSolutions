@@ -21,7 +21,7 @@ public static class AdminCatalogEndpoints
     {
         var g = app.MapGroup("/api/admin/clients").AddEndpointFilter<AdminFilter>();
 
-        g.MapGet("/", async (Database db, CancellationToken ct) =>
+        g.MapGet("/", [AdminPerm(Perm.ClientsRead)] async (Database db, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             var rows = await conn.QueryAsync<Client>(
@@ -38,7 +38,7 @@ public static class AdminCatalogEndpoints
             return Results.Ok(rows);
         });
 
-        g.MapPost("/", async (UpsertClientRequest req, Database db, CancellationToken ct) =>
+        g.MapPost("/", [AdminPerm(Perm.ClientsWrite)] async (UpsertClientRequest req, Database db, CancellationToken ct) =>
         {
             var name = req.Name?.Trim();
             if (string.IsNullOrEmpty(name))
@@ -61,7 +61,7 @@ public static class AdminCatalogEndpoints
             return Results.Created($"/api/admin/clients/{row.Id}", row);
         });
 
-        g.MapPut("/{id:long}", async (long id, UpsertClientRequest req, Database db, CancellationToken ct) =>
+        g.MapPut("/{id:long}", [AdminPerm(Perm.ClientsWrite)] async (long id, UpsertClientRequest req, Database db, CancellationToken ct) =>
         {
             var name = req.Name?.Trim();
             if (string.IsNullOrEmpty(name))
@@ -88,7 +88,7 @@ public static class AdminCatalogEndpoints
 
         // Generates a one-week claim code for this client's Telegram binding:
         // /start <code> in the bot (or the t.me deep link) connects the chat.
-        g.MapPost("/{id:long}/claim", async (long id, Database db, BotState bot, CancellationToken ct) =>
+        g.MapPost("/{id:long}/claim", [AdminPerm(Perm.ClientsWrite)] async (long id, Database db, BotState bot, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             if (!await conn.ExecuteScalarAsync<bool>(
@@ -109,7 +109,7 @@ public static class AdminCatalogEndpoints
     {
         var g = app.MapGroup("/api/admin/cities").AddEndpointFilter<AdminFilter>();
 
-        g.MapGet("/", async (Database db, CancellationToken ct) =>
+        g.MapGet("/", [AdminPerm(Perm.CitiesRead)] async (Database db, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             var rows = await conn.QueryAsync<City>(
@@ -117,7 +117,7 @@ public static class AdminCatalogEndpoints
             return Results.Ok(rows);
         });
 
-        g.MapPost("/", async (CreateCityRequest req, Database db, CancellationToken ct) =>
+        g.MapPost("/", [AdminPerm(Perm.CitiesWrite)] async (CreateCityRequest req, Database db, CancellationToken ct) =>
         {
             var code = req.Code?.Trim().ToUpperInvariant() ?? "";
             var name = req.Name?.Trim();
@@ -140,7 +140,7 @@ public static class AdminCatalogEndpoints
                 : Results.Created($"/api/admin/cities/{code}", row);
         });
 
-        g.MapPut("/{code}", async (string code, UpdateCityRequest req, Database db, CancellationToken ct) =>
+        g.MapPut("/{code}", [AdminPerm(Perm.CitiesWrite)] async (string code, UpdateCityRequest req, Database db, CancellationToken ct) =>
         {
             var c = code.Trim().ToUpperInvariant();
             await using var conn = await db.OpenAsync(ct);
@@ -168,7 +168,7 @@ public static class AdminCatalogEndpoints
     {
         var g = app.MapGroup("/api/admin/trips").AddEndpointFilter<AdminFilter>();
 
-        g.MapGet("/", async (Database db, string? status, CancellationToken ct) =>
+        g.MapGet("/", [AdminPerm(Perm.TripsRead)] async (Database db, string? status, CancellationToken ct) =>
         {
             var st = string.IsNullOrWhiteSpace(status) ? null : status.Trim();
             var filter = st is not null ? "WHERE t.status = @st" : "";
@@ -192,8 +192,7 @@ public static class AdminCatalogEndpoints
                 FROM trips t
                 LEFT JOIN clients cc ON cc.id = t.courier_client_id
                 {filter}
-                ORDER BY CASE t.status WHEN 'planned' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END,
-                         t.planned_date ASC NULLS LAST,
+                ORDER BY t.planned_date ASC NULLS LAST,
                          t.created_at DESC
                 """,
                 new { st })).AsList();
@@ -216,7 +215,7 @@ public static class AdminCatalogEndpoints
             return Results.Ok(rows);
         });
 
-        g.MapPost("/", async (UpsertTripRequest req, Database db, AdminIdentity identity, HttpContext http, CancellationToken ct) =>
+        g.MapPost("/", [AdminPerm(Perm.TripsWrite)] async (UpsertTripRequest req, Database db, AdminIdentity identity, HttpContext http, CancellationToken ct) =>
         {
             var title = req.Title?.Trim();
             if (string.IsNullOrEmpty(title))
@@ -252,7 +251,7 @@ public static class AdminCatalogEndpoints
             return Results.Created($"/api/admin/trips/{row.Id}", row);
         });
 
-        g.MapPut("/{id:long}", async (long id, UpsertTripRequest req, Database db, CancellationToken ct) =>
+        g.MapPut("/{id:long}", [AdminPerm(Perm.TripsWrite)] async (long id, UpsertTripRequest req, Database db, CancellationToken ct) =>
         {
             if (req.Status is { } status && !new[] { "planned", "completed", "cancelled" }.Contains(status))
                 return Bad("Trip status must be 'planned', 'completed' or 'cancelled'.");
@@ -326,7 +325,7 @@ public static class AdminCatalogEndpoints
         // "arrived" marks everything in_transit → at_destination. The logic is
         // shared with the Telegram bot: TripBulk also handles timeline events,
         // trip completion and recipient Telegram digests.
-        g.MapPost("/{id:long}/shipments/status", async (long id, TripBulkStatusRequest req, Database db, TripBulk bulk, CancellationToken ct) =>
+        g.MapPost("/{id:long}/shipments/status", [AdminPerm(Perm.TripsWrite)] async (long id, TripBulkStatusRequest req, Database db, TripBulk bulk, CancellationToken ct) =>
         {
             var to = req.Status?.Trim() ?? "";
             if (to is not (ShipmentStatus.InTransit or ShipmentStatus.AtDestination))
@@ -341,7 +340,7 @@ public static class AdminCatalogEndpoints
         });
 
         // Spawn one (or the mirrored return) trip from a prior-saved route template.
-        g.MapPost("/from-template/{templateId:long}", async (long templateId, InstantiateTripRequest req, Database db, AdminIdentity identity, HttpContext http, CancellationToken ct) =>
+        g.MapPost("/from-template/{templateId:long}", [AdminPerm(Perm.TripsWrite)] async (long templateId, InstantiateTripRequest req, Database db, AdminIdentity identity, HttpContext http, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             var t = await conn.QuerySingleOrDefaultAsync<TripTemplate>(
@@ -389,7 +388,7 @@ public static class AdminCatalogEndpoints
     {
         var g = app.MapGroup("/api/admin/trip-templates").AddEndpointFilter<AdminFilter>();
 
-        g.MapGet("/", async (Database db, CancellationToken ct) =>
+        g.MapGet("/", [AdminPerm(Perm.TripsRead)] async (Database db, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             var rows = await conn.QueryAsync<TripTemplate>(
@@ -402,7 +401,7 @@ public static class AdminCatalogEndpoints
             return Results.Ok(rows);
         });
 
-        g.MapPost("/", async (UpsertTripTemplateRequest req, Database db, CancellationToken ct) =>
+        g.MapPost("/", [AdminPerm(Perm.TripsWrite)] async (UpsertTripTemplateRequest req, Database db, CancellationToken ct) =>
         {
             var title = req.Title?.Trim();
             if (string.IsNullOrEmpty(title))
@@ -426,7 +425,7 @@ public static class AdminCatalogEndpoints
             return Results.Created($"/api/admin/trip-templates/{row.Id}", row);
         });
 
-        g.MapPut("/{id:long}", async (long id, UpsertTripTemplateRequest req, Database db, CancellationToken ct) =>
+        g.MapPut("/{id:long}", [AdminPerm(Perm.TripsWrite)] async (long id, UpsertTripTemplateRequest req, Database db, CancellationToken ct) =>
         {
             if (!ModeValid(req.TransportMode))
                 return Bad("Transport mode must be 'train', 'car' or 'unknown'.");
@@ -467,7 +466,7 @@ public static class AdminCatalogEndpoints
             return Results.Ok(row);
         });
 
-        g.MapDelete("/{id:long}", async (long id, Database db, CancellationToken ct) =>
+        g.MapDelete("/{id:long}", [AdminPerm(Perm.TripsWrite)] async (long id, Database db, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             var deleted = await conn.ExecuteAsync("DELETE FROM trip_templates WHERE id = @id", new { id });

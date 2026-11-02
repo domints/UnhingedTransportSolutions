@@ -16,31 +16,6 @@ Public-facing tracking portal + admin panel, with a serious corporate face and a
 | Telegram  | [Telegram.Bot](https://github.com/TelegramBots/Telegram.Bot) (typed Bot API client, long polling) |
 | Deploy    | Docker Compose (`app` + `db`)                            |
 
-### NuGet dependencies on a flaky-TLS machine
-
-TLS from `dotnet` can fail on this machine (`NU1301`), so NuGet sources are locked to a local
-offline feed in [`nuget.config`](nuget.config) pointing at `packages-local/` (gitignored, not in
-the repo). **After a fresh clone the folder is empty and restore fails** — populate it via curl:
-
-```bash
-while read id ver; do
-  curl -s -o "packages-local/$id.$ver.nupkg" \
-    "https://api.nuget.org/v3-flatcontainer/$id/$ver/$id.$ver.nupkg"
-done <<EOF
-dapper 2.1.66
-microsoft.bcl.asyncinterfaces 9.0.1
-microsoft.extensions.dependencyinjection.abstractions 8.0.2
-microsoft.extensions.logging.abstractions 8.0.2
-microsoft.extensions.options 8.0.0
-npgsql 9.0.5
-system.reflection.emit.ilgeneration 4.7.0
-system.reflection.emit.lightweight 4.7.0
-system.threading.tasks.extensions 4.5.4
-system.text.json 8.0.5
-telegram.bot 22.10.3.3
-EOF
-```
-
 ## Quick start (dev)
 
 ```bash
@@ -60,13 +35,6 @@ cd src/Uts.Web && npm install && npm run dev   # http://localhost:5173
 ```bash
 curl -c cookies.txt -X POST 'http://localhost:5000/api/dev/login?name=Dom'
 ```
-
-> ⚠️ On this machine, `dotnet`'s outgoing TLS sometimes fails ("bad certificate format" — a flaky
-> native runtime issue). If local `dotnet run` misbehaves, run the full stack via Docker — TLS
-> inside the Linux container works fine:
-
-> ℹ️ For **build/restore** failures from the same TLS flakiness, the repo pins NuGet to the local
-> offline feed (`nuget.config` → `packages-local/`) — see "NuGet dependencies" above.
 
 ```bash
 cd deploy && docker compose up -d --build
@@ -177,6 +145,24 @@ reassignments are auto-logged on the public timeline. Completing or cancelling a
 its shipments back to "unscheduled". Each trip carries a **courier** (the creator by default);
 their name rides along in the Telegram digests recipients get when the haul departs or arrives.
 
+### API keys
+Scripts can call the admin API without the browser/OIDC flow. Keys are minted in the admin
+panel (nav: **API keys**) — each admin sees and revokes only their own.
+
+- Format: `uts_sk_` + 32 random characters; the full key is shown **once** at creation and
+  stored as a SHA-256 hash afterwards (lost key = revoke + mint new).
+- Transport: `Authorization: Bearer uts_sk_…` header, e.g.
+  `curl -H 'Authorization: Bearer uts_sk_abcdef…' https://…/api/admin/shipments`.
+- Permissions: 8 granular flags — `shipments.read/write`, `clients.read/write`,
+  `trips.read/write`, `cities.read/write` (all ticked by default at mint time). A key holding
+  `shipments.write` can call every shipment-write endpoint; missing permission → 403.
+- Hard limits by design: keys can never manage keys (`/api/admin/keys*`) and never touch the
+  identity/onboarding endpoints (`/api/admin/identity*`) — those accept cookie sessions only,
+  and key endpoints answer 403 to key principals even with every permission ticked.
+- Rate limiting: per-IP sliding window (≈120 req/min, generous), with a much tighter window
+  for requests presenting a bad/guessed key. No Redis, no new env vars — the feature ships
+  with the default configuration.
+
 ## API overview
 
 | Endpoint | Method | Auth | Description |
@@ -185,16 +171,18 @@ their name rides along in the Telegram digests recipients get when the haul depa
 | `/api/track/{number}/unlock` | POST | rate-limited | `{ "pin": "123456" }` → full details |
 | `/auth/login`, `/auth/logout` | GET | – | OIDC redirects |
 | `/api/auth/state` | GET | – | `{ authenticated, isAdmin, name }` |
-| `/api/admin/shipments` | GET | admin | list, filters: `q`, `status`, `city`, `clientId`, `tripId` (`none` = unassigned) |
-| `/api/admin/shipments` | POST | admin | create → `{ pin, shipment }` (PIN shown once) |
-| `/api/admin/shipments/{id}` | GET | admin | detail + timeline |
-| `…/{id}/status` | POST | admin | `{ "status": "picked_up" }` — validates transitions |
-| `…/{id}/trip` | POST | admin | `{ "tripId": 3 }` or `{ "tripId": null }` |
-| `…/{id}/events` | POST | admin | `{ "message": "..." }` manual timeline note |
-| `…/{id}/pin` | POST | admin | regenerate access code |
-| `/api/admin/clients` | GET/POST/PUT | admin | client records (name, contact, telegram chat id, notes) |
-| `/api/admin/cities` | GET/POST/PUT | admin | city codes + activation toggle |
-| `/api/admin/trips` | GET/POST/PUT | admin | planned trips |
+| `/api/admin/shipments` | GET | admin (key: `shipments.read`) | list, filters: `q`, `status`, `city`, `clientId`, `tripId` (`none` = unassigned) |
+| `/api/admin/shipments` | POST | admin (key: `shipments.write`) | create → `{ pin, shipment }` (PIN shown once) |
+| `/api/admin/shipments/{id}` | GET | admin (key: `shipments.read`) | detail + timeline |
+| `…/{id}/status` | POST | admin (key: `shipments.write`) | `{ "status": "picked_up" }` — validates transitions |
+| `…/{id}/trip` | POST | admin (key: `shipments.write`) | `{ "tripId": 3 }` or `{ "tripId": null }` |
+| `…/{id}/events` | POST | admin (key: `shipments.write`) | `{ "message": "..." }` manual timeline note |
+| `…/{id}/notes` | POST | admin (key: `shipments.write`) | internal notes update |
+| `…/{id}/pin` | POST | admin (key: `shipments.write`) | regenerate access code |
+| `/api/admin/clients` | GET/POST/PUT | admin (key: `clients.read/write`) | client records (name, contact, telegram chat id, notes) |
+| `/api/admin/cities` | GET/POST/PUT | admin (key: `cities.read/write`) | city codes + activation toggle |
+| `/api/admin/trips` | GET/POST/PUT | admin (key: `trips.read/write`) | planned trips |
+| `/api/admin/keys` | GET/POST/… | admin session only | own API keys — mint, list, revoke (no key access, ever) |
 
 ## CI → GHCR
 

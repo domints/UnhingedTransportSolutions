@@ -2,7 +2,7 @@
   <main class="container container--wide">
     <div class="toolbar">
       <h1 style="font-size:1.4rem; color:var(--navy); margin:0">Shipments</h1>
-      <button class="btn btn--primary" @click="openCreate">+ New shipment</button>
+      <button class="btn btn--primary" title="Register a new parcel: sender, recipient, destination — generates its tracking number and access code" @click="openCreate">+ New shipment</button>
     </div>
 
     <div v-if="created" class="callout callout--ok">
