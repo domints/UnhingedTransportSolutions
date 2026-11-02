@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.*" />
+    <PackageReference Include="MartinCostello.OpenApi.Extensions" Version="2.0.2" />
     <PackageReference Include="Npgsql" Version="9.*" />
     <PackageReference Include="Telegram.Bot" Version="22.*" />
     <!-- Built-in .NET OpenAPI document generation (serves /openapi/v1.json) -->

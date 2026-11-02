@@ -122,8 +122,10 @@ builder.Services.AddAuthorization();
 var openApiEnabled = builder.Environment.IsDevelopment() || cfg.GetValue<bool>("OpenApi:Enabled");
 if (openApiEnabled)
 {
+    builder.Services.AddHttpContextAccessor();
     builder.Services.AddOpenApi(options =>
     {
+        options.AddDocumentTransformer<AddServersTransformer>();
         // The document is the integration contract — it must tell script authors
         // that admin routes accept an API key (the route list + per-route
         // permission comes from the operation transformer below).
