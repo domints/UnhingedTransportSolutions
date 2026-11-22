@@ -30,6 +30,14 @@
         <option value="">All statuses</option>
         <option v-for="s in allStatuses" :key="s" :value="s">{{ statusLabel(s) }}</option>
       </select>
+      <button
+        type="button"
+        class="btn"
+        :title="showDelivered ? 'Hide delivered shipments from the list' : 'Include delivered shipments in the list'"
+        @click="showDelivered = !showDelivered"
+      >
+        {{ showDelivered ? 'Hide delivered' : 'Show delivered' }}<template v-if="!showDelivered && hiddenDeliveredCount"> ({{ hiddenDeliveredCount }})</template>
+      </button>
       <select v-model="cityFilter" @change="reload">
         <option value="">All cities</option>
         <option v-for="c in cities" :key="c.code" :value="c.code">{{ c.code }} · {{ c.name }}</option>
@@ -42,7 +50,7 @@
     </div>
 
     <div class="card" style="overflow-x:auto">
-      <table v-if="shipments.length" class="table">
+      <table v-if="visibleShipments.length" class="table">
         <thead>
           <tr>
             <th>Number</th>
@@ -58,7 +66,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="s in shipments" :key="s.id" @click="go(s)">
+          <tr v-for="s in visibleShipments" :key="s.id" @click="go(s)">
             <td class="mono">
               <span class="copynum">
                 {{ s.trackingNumber }}
@@ -96,7 +104,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/api'
 import type { City, Client, ShipmentListItem } from '@/types'
@@ -117,6 +125,29 @@ const courierFilter = ref('')
 const modalOpen = ref(false)
 const created = ref<{ number: string; pin: string } | null>(null)
 const activeCities = computed(() => cities.value.filter((c) => c.active))
+
+// Delivered parcels are hidden by default; picking "Delivered" in the status filter shows them regardless.
+// The choice is remembered in localStorage (storage can be unavailable, e.g. blocked cookies — then it just isn't persisted).
+const SHOW_DELIVERED_KEY = 'uts.admin.shipments.showDelivered'
+function loadShowDelivered(): boolean {
+  try {
+    return localStorage.getItem(SHOW_DELIVERED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+const showDelivered = ref(loadShowDelivered())
+watch(showDelivered, (v) => {
+  try {
+    localStorage.setItem(SHOW_DELIVERED_KEY, v ? '1' : '0')
+  } catch {
+    /* ignore */
+  }
+})
+const deliveredHidden = computed(() => !showDelivered.value && statusFilter.value !== 'delivered')
+const visibleShipments = computed(() =>
+  deliveredHidden.value ? shipments.value.filter((s) => s.status !== 'delivered') : shipments.value)
+const hiddenDeliveredCount = computed(() => shipments.value.length - visibleShipments.value.length)
 
 let debounce: ReturnType<typeof setTimeout> | undefined
 
