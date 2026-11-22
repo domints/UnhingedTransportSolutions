@@ -22,8 +22,10 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
         await conn.ExecuteAsync(
             "INSERT INTO telegram_outbox (chat_id, text, keyboard_json) VALUES (@chatId, @text, @keyboard)",
             new { chatId, text, keyboard = keyboardJson }, tx);
+        // Access-code lines ("🔑 …") must never reach the log.
+        var visible = string.Join(' ', text.Split('\n').Where(l => !l.StartsWith("🔑")));
         logger.LogInformation("Telegram: queued outbox row → chat {chatId}, {len} chars, keyboard={kb}: {preview}",
-            chatId, text.Length, keyboardJson != null, Trunc(text));
+            chatId, text.Length, keyboardJson != null, Trunc(visible));
     }
 
     /// <summary>Status change push to the recipient (skips missing chat / muted).</summary>
@@ -46,10 +48,10 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
             return;
         }
 
-        var text = TelegramTexts.ShipmentStatus(r.Number, status, r.DestinationName, r.CourierName);
+        var text = WithAccessCode(TelegramTexts.ShipmentStatus(r.Number, status, r.DestinationName, r.CourierName), r.Number, r.Pin);
         logger.LogInformation("Telegram: status push for {number} ({status}) → chat {chatId}.",
             r.Number, status, r.ChatId);
-        await EnqueueAsync(conn, tx, r.ChatId, text, TrackKeyboard(r.Number, maxButtons: 1));
+        await EnqueueAsync(conn, tx, r.ChatId, text, TrackKeyboard(r.Number, r.Pin));
     }
 
     /// <summary>Correction push after a delivered parcel was rolled back
@@ -64,14 +66,17 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
 
         logger.LogInformation("Telegram: status correction for {number} ({status}) → chat {chatId}.",
             r.Number, status, r.ChatId);
-        await EnqueueAsync(conn, tx, r.ChatId, TelegramTexts.StatusCorrection(r.Number, status),
-            TrackKeyboard(r.Number, maxButtons: 1));
+        await EnqueueAsync(conn, tx, r.ChatId,
+            WithAccessCode(TelegramTexts.StatusCorrection(r.Number, status), r.Number, r.Pin),
+            TrackKeyboard(r.Number, r.Pin));
     }
 
     /// <summary>
     /// Operational push to the courier who just received the parcel. This is
     /// work, not a recipient notification: it goes to the holder's chat even if
     /// they muted recipient updates (a chat can serve several client rows).
+    /// The access code is deliberately NOT included here — the courier hands it
+    /// to the recipient, they don't need it for their own work.
     /// </summary>
     public async Task EnqueueCourierHandoverAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, long shipmentId, long courierClientId)
@@ -94,7 +99,7 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
 
         logger.LogInformation("Telegram: handover push for {number} → custodian chat {chatId}.", r.Number, r.ChatId);
         await EnqueueAsync(conn, tx, r.ChatId, TelegramTexts.HandoverToCourier(r.Number, r.DestinationName),
-            TrackKeyboard(r.Number, maxButtons: 1));
+            TrackKeyboard(r.Number));
     }
 
     /// <summary>Short recipient push: "your parcel is now with Wiktor".</summary>
@@ -107,12 +112,13 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
 
         logger.LogInformation("Telegram: handover push for {number} → recipient chat {chatId} (now with {courier}).",
             r.Number, r.ChatId, courierName);
-        await EnqueueAsync(conn, tx, r.ChatId, TelegramTexts.HandoverRecipient(r.Number, courierName),
-            TrackKeyboard(r.Number, maxButtons: 1));
+        await EnqueueAsync(conn, tx, r.ChatId,
+            WithAccessCode(TelegramTexts.HandoverRecipient(r.Number, courierName), r.Number, r.Pin),
+            TrackKeyboard(r.Number, r.Pin));
     }
 
     private sealed record RecipientTarget(
-        string? ChatId, bool Notifications, string? Number, string? DestinationName, string? CourierName);
+        string? ChatId, bool Notifications, string? Number, string? DestinationName, string? CourierName, string? Pin);
 
     private static Task<RecipientTarget?> LoadRecipientAsync(NpgsqlConnection conn, long shipmentId)
         => conn.QuerySingleOrDefaultAsync<RecipientTarget>(
@@ -121,7 +127,8 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
                    c.telegram_notifications AS Notifications,
                    s.tracking_number        AS Number,
                    dc.name                  AS DestinationName,
-                   cc.name                  AS CourierName
+                   cc.name                  AS CourierName,
+                   s.pin                    AS Pin
             FROM shipments s
             JOIN clients c ON c.id = s.recipient_id
             JOIN cities dc ON dc.code = s.destination_code
@@ -135,11 +142,12 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
     /// rules as status pushes (bound chat, not muted).</summary>
     public async Task EnqueueNotesUpdatedAsync(NpgsqlConnection conn, NpgsqlTransaction tx, long shipmentId, string? notes)
     {
-        var r = await conn.QuerySingleOrDefaultAsync<(string? ChatId, bool Notifications, string Number)>(
+        var r = await conn.QuerySingleOrDefaultAsync<(string? ChatId, bool Notifications, string Number, string Pin)>(
             """
             SELECT c.telegram_chat_id::text,
                    c.telegram_notifications,
-                   s.tracking_number
+                   s.tracking_number,
+                   s.pin
             FROM shipments s
             JOIN clients c ON c.id = s.recipient_id
             WHERE s.id = @id
@@ -159,24 +167,26 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
         var content = notes is null ? null : (notes.Length > 800 ? notes[..797] + "…" : notes);
         var text = notes is null
             ? TelegramTexts.NotesCleared(r.Number)
-            : TelegramTexts.NotesUpdated(r.Number, content!);
+            : WithAccessCode(TelegramTexts.NotesUpdated(r.Number, content!), r.Number, r.Pin);
         logger.LogInformation("Telegram: notes push for {number} (cleared={cleared}) → chat {chatId}.",
             r.Number, notes is null, r.ChatId);
-        await EnqueueAsync(conn, tx, r.ChatId, text, TrackKeyboard(r.Number, maxButtons: 1));
+        await EnqueueAsync(conn, tx, r.ChatId, text, TrackKeyboard(r.Number, r.Pin));
     }
 
-    /// <summary>Pushes about the whole haul to each recipient with their parcels listed.</summary>
+    /// <summary>Pushes about the whole haul to each recipient with their parcels listed.
+    /// Every recipient gets a keyboard and access codes for their own parcels only.</summary>
     public async Task EnqueueTripAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, string? destinationName,
-        Func<string?, IReadOnlyList<string>, string> textTemplate, List<(string ChatId, string Number)> parcels)
+        Func<string?, IReadOnlyList<string>, string> textTemplate, List<(string ChatId, string Number, string Pin)> parcels)
     {
-        var keyboardNumbers = parcels.Select(p => p.Number).Distinct().Take(MaxPerMessageButtons).ToList();
-
         foreach (var group in parcels.GroupBy(p => p.ChatId))
         {
-            var numbers = group.Select(p => p.Number).Distinct().ToList();
-            await EnqueueAsync(conn, tx, group.Key, textTemplate(destinationName, numbers),
-                TrackKeyboardGroup(keyboardNumbers));
+            var mine = group.DistinctBy(p => p.Number).ToList();
+            var numbers = mine.Select(p => p.Number).ToList();
+            var codes = string.Join("\n", mine.Select(p => $"🔑 {p.Number}: {p.Pin}"));
+            var text = $"{textTemplate(destinationName, numbers)}\n{codes}";
+            await EnqueueAsync(conn, tx, group.Key, text,
+                TrackKeyboardGroup(mine.Take(MaxPerMessageButtons).Select(p => (p.Number, (string?)p.Pin)).ToList()));
         }
     }
 
@@ -198,28 +208,34 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
 
     private static string Trunc(string s) => s.Length <= 60 ? s : s[..57] + "…";
 
-    /// <summary>One URL button to the tracking page (null when no public URL configured).</summary>
-    public string? TrackKeyboard(string number, int maxButtons = 1)
+    /// <summary>Appends the access code line to a recipient push (the tracking
+    /// page's button already carries it, this makes it visible in the text too).</summary>
+    private static string WithAccessCode(string text, string number, string? pin)
+        => string.IsNullOrWhiteSpace(pin) ? text : $"{text}\n🔑 Kod dostępu do {number}: {pin}";
+
+    /// <summary>One URL button to the tracking page (null when no public URL configured).
+    /// Pass the PIN only for recipient pushes.</summary>
+    public string? TrackKeyboard(string number, string? pin = null)
     {
         if (string.IsNullOrWhiteSpace(options.SitePublicUrl))
             return null;
-        return Keyboard(new[] { number }, singleLabel: "📦 Śledź paczkę");
+        return Keyboard(new[] { (number, pin) }, singleLabel: "📦 Śledź paczkę");
     }
 
     /// <summary>One URL button per parcel (capped) — used for trip digests.</summary>
-    public string? TrackKeyboardGroup(IReadOnlyList<string> numbers)
+    public string? TrackKeyboardGroup(IReadOnlyList<(string Number, string? Pin)> parcels)
     {
         if (string.IsNullOrWhiteSpace(options.SitePublicUrl))
             return null;
-        return Keyboard(numbers);
+        return Keyboard(parcels);
     }
 
-    private string Keyboard(IEnumerable<string> numbers, string? singleLabel = null)
+    private string Keyboard(IEnumerable<(string Number, string? Pin)> parcels, string? singleLabel = null)
     {
-        var rows = numbers
+        var rows = parcels
             .Take(MaxPerMessageButtons)
-            .Select(n => new JsonArray(
-                new JsonObject { ["text"] = singleLabel ?? n, ["url"] = options.TrackUrl(n) }))
+            .Select(p => new JsonArray(
+                new JsonObject { ["text"] = singleLabel ?? p.Number, ["url"] = options.TrackUrl(p.Number, p.Pin) }))
             .Cast<JsonNode>()
             .ToArray();
         var board = new JsonObject { ["inline_keyboard"] = new JsonArray(rows) };

@@ -32,7 +32,10 @@ public sealed class TelegramOptions
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToHashSet();
 
-    public string TrackUrl(string number) => $"{(SitePublicUrl?.TrimEnd('/') ?? "")}/track/{number}";
+    /// <summary>Tracking page URL. With a PIN the page unlocks the details on open
+    /// (only used for recipient pushes — never for courier/admin messages).</summary>
+    public string TrackUrl(string number, string? pin = null)
+        => $"{(SitePublicUrl?.TrimEnd('/') ?? "")}/track/{number}" + (pin is null ? "" : $"?pin={pin}");
 
     public string ClaimUrl(string code) => BotUsername is null ? "" : $"https://t.me/{BotUsername}?start={code}";
 }

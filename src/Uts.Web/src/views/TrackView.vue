@@ -115,7 +115,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import { useRoute, RouterLink } from 'vue-router'
+import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { api, ApiError } from '@/api'
 import type { TrackInfo } from '@/types'
 import { fmtDate, fmtDateTime, modeLabel } from '@/format'
@@ -123,6 +123,7 @@ import StatusBadge from '@/components/StatusBadge.vue'
 import Timeline from '@/components/Timeline.vue'
 
 const route = useRoute()
+const router = useRouter()
 const number = ref((route.params.number as string) ?? '')
 const info = ref<TrackInfo | null>(null)
 const loading = ref(true)
@@ -131,6 +132,13 @@ const failed = ref(false)
 const pin = ref('')
 const unlocking = ref(false)
 const unlockError = ref('')
+
+/** Six-digit access code from the link query (?pin=…), or '' when absent/invalid. */
+function linkPin(): string {
+  const raw = Array.isArray(route.query.pin) ? route.query.pin[0] : route.query.pin
+  const v = typeof raw === 'string' ? raw.trim() : ''
+  return /^\d{6}$/.test(v) ? v : ''
+}
 
 async function load(num: string) {
   loading.value = true
@@ -145,6 +153,12 @@ async function load(num: string) {
   }
   try {
     info.value = await api.get<TrackInfo>(`/api/track/${encodeURIComponent(num)}`)
+    // Link from a notification carries the access code (?pin=…): unlock straight away.
+    const fromLink = linkPin()
+    if (info.value.unlockRequired && fromLink) {
+      pin.value = fromLink
+      await unlock()
+    }
   } catch {
     failed.value = true
   } finally {
@@ -161,6 +175,8 @@ async function unlock() {
   unlockError.value = ''
   try {
     info.value = await api.post<TrackInfo>(`/api/track/${encodeURIComponent(number.value)}/unlock`, { pin: pin.value })
+    // Drop the code from the address bar (and browser history) once it has been used.
+    if (route.query.pin !== undefined) router.replace({ path: route.path })
   } catch (e) {
     if (e instanceof ApiError && e.status === 400) {
       unlockError.value = 'Wrong access code. Double-check it.'

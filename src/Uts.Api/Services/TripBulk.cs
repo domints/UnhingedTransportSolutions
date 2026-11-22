@@ -29,9 +29,9 @@ public sealed class TripBulk(TelegramNotifier telegram)
         if (trip.Title is null)
             return null;
 
-        var assigned = (await conn.QueryAsync<(long Id, string TrackingNumber, string Status, string RecipientName, string? RecipientChat, bool RecipientNotifications)>(
+        var assigned = (await conn.QueryAsync<(long Id, string TrackingNumber, string Status, string RecipientName, string? RecipientChat, bool RecipientNotifications, string Pin)>(
             """
-            SELECT s.id, s.tracking_number, s.status, r.name, r.telegram_chat_id::text, r.telegram_notifications
+            SELECT s.id, s.tracking_number, s.status, r.name, r.telegram_chat_id::text, r.telegram_notifications, s.pin
             FROM shipments s
             JOIN clients r ON r.id = s.recipient_id
             WHERE s.trip_id = @id
@@ -40,7 +40,7 @@ public sealed class TripBulk(TelegramNotifier telegram)
         await using var tx = await conn.BeginTransactionAsync();
         var updated = new List<string>();
         var skipped = new List<object>();
-        var notified = new List<(string ChatId, string Number)>();
+        var notified = new List<(string ChatId, string Number, string Pin)>();
 
         foreach (var s in assigned)
         {
@@ -60,7 +60,7 @@ public sealed class TripBulk(TelegramNotifier telegram)
                 tx);
             updated.Add(s.TrackingNumber);
             if (s.RecipientChat is not null && s.RecipientNotifications)
-                notified.Add((s.RecipientChat, s.TrackingNumber));
+                notified.Add((s.RecipientChat, s.TrackingNumber, s.Pin));
         }
 
         // Arriving marks the journey itself done (only if still planned).
