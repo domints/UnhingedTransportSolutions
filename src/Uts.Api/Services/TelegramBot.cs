@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Dapper;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Types;
@@ -165,6 +166,10 @@ public sealed class TelegramBot(
                 await ShowPacklistAsync(bot, chatId2, ct);
                 break;
 
+            case "/waiting":
+                await ShowWaitingAsync(bot, chatId2, ct);
+                break;
+
             default:
                 await SendAsync(bot, chatId2, TelegramTexts.Help, null, ct);
                 break;
@@ -210,6 +215,15 @@ public sealed class TelegramBot(
             }
 
             await using var conn = await db.OpenAsync(ct);
+            // Only your own trips (or a trip nobody was assigned to) may be driven
+            // from the chat; another courier's packlist is none of your business.
+            var ids = await BoundClientIdsAsync(chatId, ct);
+            if (ids.Length > 0 && !await OwnsTripAsync(conn, tripId, ids))
+            {
+                await Finish(TelegramTexts.NotYourTrip);
+                return;
+            }
+
             var result = await tripBulk.MarkAllAsync(conn, tripId, to);
             if (result is null)
             {
@@ -241,8 +255,13 @@ public sealed class TelegramBot(
                 return;
             }
             await using var conn = await db.OpenAsync(ct);
+            var ids = await BoundClientIdsAsync(chatId, ct);
             var sh = await conn.QuerySingleOrDefaultAsync<(long Id, string Number)>(
-                "SELECT id, tracking_number FROM shipments WHERE id = @id", new { id = shipId });
+                $"""
+                SELECT s.id, s.tracking_number
+                FROM shipments s
+                WHERE s.id = @id {CourierScope(ids)}
+                """, new { id = shipId, ids });
             if (sh.Id == 0)
             {
                 await Finish();
@@ -268,9 +287,15 @@ public sealed class TelegramBot(
             }
 
             await using var conn = await db.OpenAsync(ct);
+            var ids = await BoundClientIdsAsync(chatId, ct);
             var sh2 = await conn.QuerySingleOrDefaultAsync<(long Id, string Number)>(
-                "SELECT id, tracking_number FROM shipments WHERE id = @id AND status IN ('in_transit','at_destination')",
-                new { id = shipId2 });
+                $"""
+                SELECT s.id, s.tracking_number
+                FROM shipments s
+                WHERE s.id = @id
+                  AND s.status IN ('in_transit','at_destination') {CourierScope(ids)}
+                """,
+                new { id = shipId2, ids });
             if (sh2.Id == 0)
             {
                 await Finish("Ta paczka nie jest już w drodze.");
@@ -289,6 +314,62 @@ public sealed class TelegramBot(
 
             await Finish();
             await SendAsync(bot, chatId, $"Paczka {sh2.Number} dostarczona ✅", null, ct);
+            return;
+        }
+
+        // "I have it": a custodian confirms they physically hold the parcel.
+        // Middlemen (no login) get exactly this one action; registered parcels
+        // become picked_up, anything further along just records the confirmation.
+        if (data.StartsWith("custody:"))
+        {
+            if (!long.TryParse(data["custody:".Length..], out var custodyId))
+            {
+                await Finish();
+                return;
+            }
+
+            await using var conn = await db.OpenAsync(ct);
+            var ids = await BoundClientIdsAsync(chatId, ct);
+            var sh = ids.Length == 0
+                ? default
+                : await conn.QuerySingleOrDefaultAsync<(long Id, string Number, string Status, string CourierName)>(
+                    """
+                    SELECT s.id, s.tracking_number, s.status, c.name
+                    FROM shipments s
+                    JOIN clients c ON c.id = s.assigned_courier_client_id
+                    WHERE s.id = @id AND s.assigned_courier_client_id = ANY(@ids)
+                    """, new { id = custodyId, ids });
+            if (sh.Id == 0)
+            {
+                await Finish(TelegramTexts.NotYourCustody);
+                return;
+            }
+            if (sh.Status is ShipmentStatus.Delivered or ShipmentStatus.Cancelled or ShipmentStatus.Lost)
+            {
+                await Finish(TelegramTexts.ShipmentClosed);
+                return;
+            }
+
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            if (sh.Status == ShipmentStatus.Registered)
+            {
+                await conn.ExecuteAsync(
+                    """
+                    UPDATE shipments SET status = 'picked_up', updated_at = now() WHERE id = @id;
+                    INSERT INTO shipment_events (shipment_id, type, message)
+                    VALUES (@id, 'status', @msg);
+                    """,
+                    new { id = custodyId, msg = $"Status updated: {ShipmentStatus.Label(ShipmentStatus.PickedUp).ToUpperInvariant()}" },
+                    tx);
+                await telegram.EnqueueShipmentStatusAsync(conn, tx, custodyId, ShipmentStatus.PickedUp);
+            }
+            await conn.ExecuteAsync(
+                "INSERT INTO shipment_events (shipment_id, type, message) VALUES (@id, 'courier', @msg)",
+                new { id = custodyId, msg = $"Custody confirmed by {sh.CourierName} (Telegram)." }, tx);
+            await tx.CommitAsync(ct);
+
+            await Finish();
+            await SendAsync(bot, chatId, $"{TelegramTexts.CustodyConfirmed} {sh.Number}", null, ct);
             return;
         }
 
@@ -391,19 +472,62 @@ public sealed class TelegramBot(
         return false;
     }
 
-    private async Task PickTripAsync(TelegramBotClient bot, long chatId, string to, string question, string callbackPrefix, CancellationToken ct)
+    /// <summary>Client rows bound to this chat. A chat may serve several rows
+    /// (one person as recipient and as courier, or a shared household phone),
+    /// so every custody check compares against the whole set.</summary>
+    private async Task<long[]> BoundClientIdsAsync(long chatId, CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
-        var trips = (await conn.QueryAsync<(long Id, string Title, DateTime? PlannedDate, int Count)>(
+        return (await conn.QueryAsync<long>(
+            "SELECT id FROM clients WHERE telegram_chat_id = @chatId",
+            new { chatId = chatId.ToString(CultureInfo.InvariantCulture) })).ToArray();
+    }
+
+    /// <summary>Trip ownership for chat-driven packlists: the chat's own trips
+    /// plus trips nobody was assigned to (legacy rows, shared hauls).</summary>
+    private static Task<bool> OwnsTripAsync(NpgsqlConnection conn, long tripId, long[] ids)
+        => conn.ExecuteScalarAsync<bool>(
             """
+            SELECT EXISTS (
+                SELECT 1 FROM trips
+                WHERE id = @tripId
+                  AND (courier_client_id = ANY(@ids) OR courier_client_id IS NULL))
+            """, new { tripId, ids });
+
+    /// <summary>SQL fragment narrowing a trip query to the chat's courier.
+    /// Empty for chats without a bound client — the legacy env-list bridge
+    /// keeps the old global behaviour.</summary>
+    private static string TripScope(long[] ids)
+        => ids.Length == 0
+            ? ""
+            : "AND (t.courier_client_id = ANY(@ids) OR t.courier_client_id IS NULL)";
+
+    /// <summary>SQL fragment narrowing shipments to parcels the chat is
+    /// responsible for: in their custody, or on one of their trips. Empty for
+    /// chats without a bound client (legacy env-list installs).</summary>
+    private static string CourierScope(long[] ids)
+        => ids.Length == 0
+            ? ""
+            : """
+              AND (s.assigned_courier_client_id = ANY(@ids)
+                   OR s.trip_id IN (SELECT t.id FROM trips t
+                                    WHERE t.courier_client_id = ANY(@ids) OR t.courier_client_id IS NULL))
+              """;
+
+    private async Task PickTripAsync(TelegramBotClient bot, long chatId, string to, string question, string callbackPrefix, CancellationToken ct)
+    {
+        var ids = await BoundClientIdsAsync(chatId, ct);
+        await using var conn = await db.OpenAsync(ct);
+        var trips = (await conn.QueryAsync<(long Id, string Title, DateTime? PlannedDate, int Count)>(
+            $"""
             SELECT t.id, t.title, t.planned_date, COUNT(s.id)::int
             FROM trips t
             LEFT JOIN shipments s ON s.trip_id = t.id
-            WHERE t.status = 'planned'
+            WHERE t.status = 'planned' {TripScope(ids)}
             GROUP BY t.id, t.title, t.planned_date
             ORDER BY (t.planned_date < CURRENT_DATE) ASC, t.planned_date ASC NULLS LAST, t.created_at DESC
             LIMIT 8
-            """)).AsList();
+            """, new { ids })).AsList();
         if (trips.Count == 0)
         {
             await SendAsync(bot, chatId, "Brak zaplanowanych podróży.", null, ct);
@@ -417,16 +541,17 @@ public sealed class TelegramBot(
 
     private async Task ShowDeliverableAsync(TelegramBotClient bot, long chatId, CancellationToken ct)
     {
+        var ids = await BoundClientIdsAsync(chatId, ct);
         await using var conn = await db.OpenAsync(ct);
         var rows = (await conn.QueryAsync<(long Id, string Number, string RecipientName)>(
-            """
+            $"""
             SELECT s.id, s.tracking_number, r.name
             FROM shipments s
             JOIN clients r ON r.id = s.recipient_id
-            WHERE s.status IN ('in_transit','at_destination')
+            WHERE s.status IN ('in_transit','at_destination') {CourierScope(ids)}
             ORDER BY s.tracking_number
             LIMIT 20
-            """)).AsList();
+            """, new { ids })).AsList();
         if (rows.Count == 0)
         {
             await SendAsync(bot, chatId, "Brak paczek w drodze — wszystko dostarczone. 🎉", null, ct);
@@ -439,15 +564,16 @@ public sealed class TelegramBot(
 
     private async Task ShowPacklistAsync(TelegramBotClient bot, long chatId, CancellationToken ct)
     {
+        var ids = await BoundClientIdsAsync(chatId, ct);
         await using var conn = await db.OpenAsync(ct);
         var trip = await conn.QuerySingleOrDefaultAsync<(long Id, string Title)>(
-            """
+            $"""
             SELECT t.id, t.title
             FROM trips t
-            WHERE t.status = 'planned'
+            WHERE t.status = 'planned' {TripScope(ids)}
             ORDER BY (t.planned_date < CURRENT_DATE) ASC, t.planned_date ASC NULLS LAST, t.created_at DESC
             LIMIT 1
-            """);
+            """, new { ids });
         if (trip.Id == 0)
         {
             await SendAsync(bot, chatId, "Brak zaplanowanych podróży.", null, ct);
@@ -471,6 +597,41 @@ public sealed class TelegramBot(
         var lines = haul.Select(h =>
             $"• {h.Number} — {TelegramTexts.StatusLabel(h.Status)} — {h.Recipient} — {Truncate(h.Description, 40)}");
         await SendAsync(bot, chatId, $"Packlist „{trip.Title}”:\n{string.Join('\n', lines)}", null, ct);
+    }
+
+    /// <summary>Custody list for whoever holds parcels right now — the middleman
+    /// tier's whole workflow: see what you carry, confirm you have it.</summary>
+    private async Task ShowWaitingAsync(TelegramBotClient bot, long chatId, CancellationToken ct)
+    {
+        var ids = await BoundClientIdsAsync(chatId, ct);
+        if (ids.Length == 0)
+        {
+            await SendAsync(bot, chatId, TelegramTexts.NoBinding, null, ct);
+            return;
+        }
+
+        await using var conn = await db.OpenAsync(ct);
+        var rows = (await conn.QueryAsync<(long Id, string Number, string Status, string Recipient, string Destination)>(
+            """
+            SELECT s.id, s.tracking_number, s.status, r.name, dc.name
+            FROM shipments s
+            JOIN clients r ON r.id = s.recipient_id
+            JOIN cities dc ON dc.code = s.destination_code
+            WHERE s.assigned_courier_client_id = ANY(@ids)
+              AND s.status NOT IN ('delivered','cancelled','lost')
+            ORDER BY s.created_at
+            LIMIT 20
+            """, new { ids })).AsList();
+        if (rows.Count == 0)
+        {
+            await SendAsync(bot, chatId, TelegramTexts.WaitingEmpty, null, ct);
+            return;
+        }
+
+        foreach (var p in rows)
+            await SendAsync(bot, chatId,
+                TelegramTexts.WaitingItem(p.Number, p.Status, p.Recipient, p.Destination),
+                Inline(("✅ Mam ją", $"custody:{p.Id}")), ct);
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";

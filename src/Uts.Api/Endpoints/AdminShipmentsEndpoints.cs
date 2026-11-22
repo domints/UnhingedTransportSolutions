@@ -6,15 +6,15 @@ using Uts.Api.Services;
 
 namespace Uts.Api.Endpoints;
 
-/// <summary>Admin shipment management (list, create, status, trip, events, notes, PIN).</summary>
+/// <summary>Admin shipment management (list, create, status, trip, custody, events, notes, PIN).</summary>
 public static class AdminShipmentsEndpoints
 {
     public static void MapAdminShipments(this IEndpointRouteBuilder app)
     {
         var g = app.MapGroup("/api/admin/shipments").AddEndpointFilter<AdminFilter>();
 
-        g.MapGet("/", [AdminPerm(Perm.ShipmentsRead)] async (Database db, string? status, string? city, long? clientId, string? tripId, string? q,
-            CancellationToken ct) =>
+        g.MapGet("/", [AdminPerm(Perm.ShipmentsRead)] async (Database db, string? status, string? city, long? clientId,
+            string? tripId, string? courierId, string? q, CancellationToken ct) =>
         {
             var conditions = new List<string>();
             var p = new DynamicParameters();
@@ -46,6 +46,19 @@ public static class AdminShipmentsEndpoints
                     p.Add("tripId", tid);
                 }
             }
+            // Custody filter: who physically holds the parcel right now.
+            if (!string.IsNullOrWhiteSpace(courierId))
+            {
+                if (courierId == "none")
+                {
+                    conditions.Add("s.assigned_courier_client_id IS NULL");
+                }
+                else if (long.TryParse(courierId, out var cuid))
+                {
+                    conditions.Add("s.assigned_courier_client_id = @courierId");
+                    p.Add("courierId", cuid);
+                }
+            }
             if (!string.IsNullOrWhiteSpace(q))
             {
                 conditions.Add("""
@@ -72,12 +85,15 @@ public static class AdminShipmentsEndpoints
                        s.trip_id               AS TripId,
                        t.title                 AS TripTitle,
                        t.planned_date          AS TripPlannedDate,
+                       s.assigned_courier_client_id AS AssignedCourierClientId,
+                       cust.name               AS AssignedCourierName,
                        s.created_at            AS CreatedAt
                 FROM shipments s
                 JOIN clients sender ON sender.id = s.sender_id
                 JOIN clients recipient ON recipient.id = s.recipient_id
                 JOIN cities dc ON dc.code = s.destination_code
                 LEFT JOIN trips t ON t.id = s.trip_id
+                LEFT JOIN clients cust ON cust.id = s.assigned_courier_client_id
                 {where}
                 ORDER BY s.created_at DESC
                 LIMIT 500
@@ -189,20 +205,38 @@ public static class AdminShipmentsEndpoints
                     new { error = $"Cannot move from '{ShipmentStatus.Label(current.Status)}' to '{ShipmentStatus.Label(to)}'." },
                     statusCode: StatusCodes.Status409Conflict);
 
+            var backward = ShipmentStatus.IsBackward(current.Status, to);
+            var leftDelivered = current.Status == ShipmentStatus.Delivered && to != ShipmentStatus.Delivered;
+
             await using var tx = await conn.BeginTransactionAsync();
             await conn.ExecuteAsync(
                 """
                 UPDATE shipments
                 SET status = @to,
                     updated_at = now(),
-                    delivered_at = CASE WHEN @to = 'delivered' THEN now() ELSE delivered_at END
+                    -- entering 'delivered' stamps the moment; leaving it (rollback)
+                    -- clears it, so the tracking page stops claiming a delivery.
+                    delivered_at = CASE WHEN @to = 'delivered' THEN now()
+                                        WHEN @leftDelivered THEN NULL
+                                        ELSE delivered_at END
                 WHERE id = @id
                 """,
-                new { to, id }, tx);
+                new { to, leftDelivered, id }, tx);
             await conn.ExecuteAsync(
                 "INSERT INTO shipment_events (shipment_id, type, message) VALUES (@id, 'status', @msg)",
-                new { id, msg = $"Status updated: {ShipmentStatus.Label(to).ToUpperInvariant()}" }, tx);
-            await telegram.EnqueueShipmentStatusAsync(conn, tx, id, to);
+                new
+                {
+                    id,
+                    msg = backward
+                        ? $"Status reverted: {ShipmentStatus.Label(current.Status).ToUpperInvariant()} → {ShipmentStatus.Label(to).ToUpperInvariant()}"
+                        : $"Status updated: {ShipmentStatus.Label(to).ToUpperInvariant()}",
+                }, tx);
+            // Recipients hear about every forward move; a rollback is an internal
+            // correction — only leaving 'delivered' is worth a (corrective) push.
+            if (!backward)
+                await telegram.EnqueueShipmentStatusAsync(conn, tx, id, to);
+            else if (leftDelivered)
+                await telegram.EnqueueStatusCorrectionAsync(conn, tx, id, to);
             await tx.CommitAsync();
 
             var detail = await LoadDetail(conn, id, ct);
@@ -233,38 +267,155 @@ public static class AdminShipmentsEndpoints
                 return Results.Ok(removed);
             }
 
-            var trip = await conn.QuerySingleOrDefaultAsync<(string Title, DateTime? PlannedDate, string Status, string? OriginCode, string? DestinationCode)>(
-                "SELECT title, planned_date, status, origin_code, destination_code FROM trips WHERE id = @tid",
-                new { tid = req.TripId });
+            var tripId = req.TripId!.Value;
+            var trip = await conn.QuerySingleOrDefaultAsync<(string Title, DateTime? PlannedDate, string Status, string? OriginCode, string? DestinationCode, long? CourierClientId)>(
+                "SELECT title, planned_date, status, origin_code, destination_code, courier_client_id FROM trips WHERE id = @tid",
+                new { tid = tripId });
             if (trip.Title is null)
                 return Results.NotFound(new { error = "Trip not found." });
             if (trip.Status != "planned")
                 return Results.Json(
                     new { error = $"Trip '{trip.Title}' is {trip.Status} — shipments can only join planned trips." },
                     statusCode: StatusCodes.Status409Conflict);
-            if (trip.DestinationCode is not null && trip.DestinationCode != current.DestinationCode)
-            {
-                var route = (await conn.QueryAsync<string>(
-                        "SELECT city_code FROM trip_stops WHERE trip_id = @tid ORDER BY position",
-                        new { tid = req.TripId })).AsList();
-                if (!route.Contains(current.DestinationCode))
-                    return Results.Json(
-                        new
-                        {
-                            error = $"Trip route ({trip.OriginCode ?? "?"} → {string.Join(" → ", route)} → {trip.DestinationCode}) " +
-                                    $"does not include shipment destination ({current.DestinationCode})."
-                        },
-                        statusCode: StatusCodes.Status409Conflict);
-            }
+            var route = await TripRoute.StopsAsync(conn, tripId);
+            if (!TripRoute.Covers(trip.DestinationCode, route, current.DestinationCode))
+                return Results.Json(
+                    new
+                    {
+                        error = $"Trip route ({TripRoute.Describe(trip.OriginCode, route, trip.DestinationCode)}) " +
+                                $"does not include shipment destination ({current.DestinationCode})."
+                    },
+                    statusCode: StatusCodes.Status409Conflict);
 
             var when = trip.PlannedDate is { } d ? $" (planned {d:yyyy-MM-dd})" : "";
             var title = trip.Title;
+            // Joining a trip also puts the parcel in the trip courier's hands —
+            // unless the trip names nobody, in which case custody is left alone.
             await conn.ExecuteAsync(
-                "UPDATE shipments SET trip_id = @tid, updated_at = now() WHERE id = @id",
-                new { tid = req.TripId, id });
+                """
+                UPDATE shipments
+                SET trip_id = @tid,
+                    assigned_courier_client_id = COALESCE(@courier, assigned_courier_client_id),
+                    updated_at = now()
+                WHERE id = @id
+                """,
+                new { tid = tripId, courier = trip.CourierClientId, id });
             await conn.ExecuteAsync(
                 "INSERT INTO shipment_events (shipment_id, type, message) VALUES (@id, 'trip', @msg)",
                 new { id, msg = $"Added to trip \"{title}\"{when}." });
+
+            var detail = await LoadDetail(conn, id, ct);
+            return Results.Ok(detail);
+        });
+
+        // Custody handover: who physically holds the parcel right now. Deliberately
+        // independent of trips — handing a parcel to a courier who has no planned
+        // trip yet is the whole point. Optionally detaches it from the current trip
+        // and/or steps the status one back (the parcel may have "arrived" with the
+        // previous courier, but the last leg starts over with the new one).
+        g.MapPost("/{id:long}/courier", [AdminPerm(Perm.ShipmentsWrite)] async (long id, CourierHandoverRequest req, Database db,
+            TelegramNotifier telegram, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            var current = await conn.QuerySingleOrDefaultAsync<CustodyRow>(
+                """
+                SELECT s.tracking_number             AS Number,
+                       s.trip_id                     AS TripId,
+                       s.status                      AS Status,
+                       s.destination_code            AS DestinationCode,
+                       s.assigned_courier_client_id  AS CourierClientId,
+                       cust.name                     AS CourierName
+                FROM shipments s
+                LEFT JOIN clients cust ON cust.id = s.assigned_courier_client_id
+                WHERE s.id = @id
+                """, new { id });
+            if (current is null)
+                return Results.NotFound(new { error = "Shipment not found." });
+
+            if (current.Status is ShipmentStatus.Delivered or ShipmentStatus.Cancelled or ShipmentStatus.Lost)
+                return Results.Json(
+                    new { error = $"Cannot hand over a {ShipmentStatus.Label(current.Status!).ToLowerInvariant()} shipment. Revert its status first." },
+                    statusCode: StatusCodes.Status409Conflict);
+
+            string? newCourierName = null;
+            if (req.CourierClientId is { } cid)
+            {
+                newCourierName = await conn.QuerySingleOrDefaultAsync<string>(
+                    "SELECT name FROM clients WHERE id = @cid", new { cid });
+                if (newCourierName is null)
+                    return Bad("Courier client does not exist.");
+            }
+
+            var detach = req.ReleaseFromTrip == true && current.TripId is not null;
+            var backStatus = req.RevertStatus == true ? ShipmentStatus.PreviousStatus(current.Status!) : null;
+            var custodyChanged = req.CourierClientId != current.CourierClientId;
+            var note = string.IsNullOrWhiteSpace(req.Note) ? null : req.Note.Trim();
+            if (!detach && backStatus is null && !custodyChanged && note is null)
+                return Bad("Nothing to change — the shipment is already in that courier's custody.");
+
+            await using var tx = await conn.BeginTransactionAsync(ct);
+
+            // 1. Detach from the trip (custody stays where it is; handover is explicit).
+            if (detach)
+            {
+                var tripTitle = await conn.QuerySingleOrDefaultAsync<string?>(
+                    "SELECT title FROM trips WHERE id = @tid", new { tid = current.TripId }, tx);
+                await conn.ExecuteAsync(
+                    "UPDATE shipments SET trip_id = NULL, updated_at = now() WHERE id = @id", new { id }, tx);
+                await conn.ExecuteAsync(
+                    "INSERT INTO shipment_events (shipment_id, type, message) VALUES (@id, 'trip', @msg)",
+                    new { id, msg = tripTitle is null ? "Removed from trip (handover)." : $"Removed from trip \"{tripTitle}\" (handover)." }, tx);
+            }
+
+            // 2. Optional one-step status rollback.
+            if (backStatus is not null)
+            {
+                await conn.ExecuteAsync(
+                    """
+                    UPDATE shipments
+                    SET status = @back,
+                        updated_at = now(),
+                        delivered_at = CASE WHEN @from = 'delivered' THEN NULL ELSE delivered_at END
+                    WHERE id = @id
+                    """,
+                    new { back = backStatus, from = current.Status, id }, tx);
+                await conn.ExecuteAsync(
+                    "INSERT INTO shipment_events (shipment_id, type, message) VALUES (@id, 'status', @msg)",
+                    new
+                    {
+                        id,
+                        msg = $"Status reverted: {ShipmentStatus.Label(current.Status!).ToUpperInvariant()} → {ShipmentStatus.Label(backStatus).ToUpperInvariant()}",
+                    }, tx);
+            }
+
+            // 3. Custody itself (+ the timeline entry and both pushes).
+            if (custodyChanged)
+            {
+                await conn.ExecuteAsync(
+                    "UPDATE shipments SET assigned_courier_client_id = @cid, updated_at = now() WHERE id = @id",
+                    new { cid = req.CourierClientId, id }, tx);
+
+                var msg = req.CourierClientId is null
+                    ? (current.CourierName is null ? "Custody cleared." : $"Custody cleared (was {current.CourierName}).")
+                    : (current.CourierName is null ? $"Custody assigned to {newCourierName}." : $"Custody handed over to {newCourierName}.");
+                await conn.ExecuteAsync(
+                    "INSERT INTO shipment_events (shipment_id, type, message) VALUES (@id, 'courier', @msg)",
+                    new { id, msg = note is null ? msg : $"{msg} {note}" }, tx);
+
+                if (req.CourierClientId is { } custodian)
+                    await telegram.EnqueueCourierHandoverAsync(conn, tx, id, custodian);
+                // The recipient only cares when someone new now carries their parcel.
+                if (newCourierName is not null)
+                    await telegram.EnqueueHandoverRecipientAsync(conn, tx, id, newCourierName);
+            }
+            else if (note is not null)
+            {
+                await conn.ExecuteAsync(
+                    "INSERT INTO shipment_events (shipment_id, type, message) VALUES (@id, 'courier', @msg)",
+                    new { id, msg = note }, tx);
+            }
+
+            await tx.CommitAsync(ct);
 
             var detail = await LoadDetail(conn, id, ct);
             return Results.Ok(detail);
@@ -359,6 +510,8 @@ public static class AdminShipmentsEndpoints
                    t.title              AS TripTitle,
                    t.planned_date       AS TripPlannedDate,
                    t.status             AS TripStatus,
+                   s.assigned_courier_client_id AS AssignedCourierClientId,
+                   cust.name            AS AssignedCourierName,
                    s.created_at         AS CreatedAt,
                    s.updated_at         AS UpdatedAt,
                    s.delivered_at       AS DeliveredAt
@@ -368,6 +521,7 @@ public static class AdminShipmentsEndpoints
             JOIN cities dc ON dc.code = s.destination_code
             LEFT JOIN cities oc ON oc.code = s.origin_code
             LEFT JOIN trips t ON t.id = s.trip_id
+            LEFT JOIN clients cust ON cust.id = s.assigned_courier_client_id
             WHERE s.id = @id
             """, new { id });
 
@@ -390,8 +544,9 @@ public static class AdminShipmentsEndpoints
         return new ShipmentDetail(
             s.Id, s.TrackingNumber, s.Status, s.SenderId, s.SenderName, s.RecipientId, s.RecipientName,
             s.OriginCode, s.OriginName, s.DestinationCode, s.DestinationName, s.Description, s.TransportMode,
-            s.Notes, s.Pin, s.TripId, s.TripTitle, s.TripPlannedDate, s.TripStatus, s.CreatedAt, s.UpdatedAt,
-            s.DeliveredAt, events);
+            s.Notes, s.Pin, s.TripId, s.TripTitle, s.TripPlannedDate, s.TripStatus,
+            s.AssignedCourierClientId, s.AssignedCourierName,
+            s.CreatedAt, s.UpdatedAt, s.DeliveredAt, events);
     }
 
     private static IResult Bad(string message) => Results.Json(new { error = message },
@@ -404,6 +559,12 @@ public static class AdminShipmentsEndpoints
     public sealed record StatusChangeRequest(string Status);
 
     public sealed record TripAssignRequest(long? TripId);
+
+    /// <summary>Custody handover. <c>CourierClientId: null</c> clears the holder;
+    /// <c>ReleaseFromTrip</c> detaches from the current trip; <c>RevertStatus</c>
+    /// steps the status one back (e.g. in_transit → picked_up mid-route).</summary>
+    public sealed record CourierHandoverRequest(
+        long? CourierClientId, bool? ReleaseFromTrip, bool? RevertStatus, string? Note);
 
     public sealed record ManualEventRequest(string Message);
 
@@ -429,7 +590,18 @@ public static class AdminShipmentsEndpoints
         string? TripTitle,
         DateTime? TripPlannedDate,
         string? TripStatus,
+        long? AssignedCourierClientId,
+        string? AssignedCourierName,
         DateTime CreatedAt,
         DateTime UpdatedAt,
         DateTime? DeliveredAt);
+
+    /// <summary>Custody lookup for the handover endpoint (joined holder name).</summary>
+    private sealed record CustodyRow(
+        string? Number,
+        long? TripId,
+        string? Status,
+        string? DestinationCode,
+        long? CourierClientId,
+        string? CourierName);
 }

@@ -88,6 +88,9 @@ export interface ShipmentListItem {
   tripId: number | null
   tripTitle: string | null
   tripPlannedDate: string | null
+  /** Who physically holds the parcel right now (independent of trips). */
+  assignedCourierClientId: number | null
+  assignedCourierName: string | null
   createdAt: string
 }
 
@@ -111,6 +114,8 @@ export interface ShipmentDetail {
   tripTitle: string | null
   tripPlannedDate: string | null
   tripStatus: string | null
+  assignedCourierClientId: number | null
+  assignedCourierName: string | null
   createdAt: string
   updatedAt: string
   deliveredAt: string | null

@@ -10,8 +10,8 @@ namespace Uts.Api.Endpoints;
 
 /// <summary>
 /// Public tracking API. Basic status/route/timeline is open; the 6-digit access
-/// code unlocks sender, recipient, description and the planned trip. Trip events
-/// are hidden from the public timeline until unlocked.
+/// code unlocks sender, recipient, description and the planned trip. Trip and
+/// custody (courier) events are hidden from the public timeline until unlocked.
 /// </summary>
 public static class TrackEndpoints
 {
@@ -46,7 +46,7 @@ public static class TrackEndpoints
                 """
                 SELECT type AS Type, message AS Message, created_at AS CreatedAt
                 FROM shipment_events
-                WHERE shipment_id = @id AND type <> 'trip'
+                WHERE shipment_id = @id AND type NOT IN ('trip', 'courier')
                 ORDER BY created_at DESC
                 """,
                 new { id = sh.Id })).ToArray();

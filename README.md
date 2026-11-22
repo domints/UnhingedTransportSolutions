@@ -89,6 +89,54 @@ themselves in the admin panel. Until then, chat ids on `TELEGRAM__ADMINCHATIDS` 
 a bridge between bot setup and the first panel onboarding; the env list is the fallback, the
 database is the source of truth.
 
+`/leaving`, `/arrived` and `/packlist` only see **your own trips** (plus trips with no courier
+assigned, e.g. rows created before couriers existed); `/deliver` only lists parcels in your
+custody or on your trips. A chat bound to no client row keeps the old global behaviour.
+
+### Middlemen (no panel account)
+
+A client row without `auth_sub` cannot log into the panel, but can still work the parcels they
+physically carry:
+
+- `/waiting` lists every parcel in their custody (one message per parcel).
+- **"✅ Mam ją"** confirms possession: a `registered` parcel becomes `picked_up`, anything
+  further along just records a `courier` timeline entry.
+
+Everything else is deliberately closed to them: no `in_transit` / `at_destination` / `delivered`,
+no cancel/lost, no trip assignment, no handover. Those stay with the couriers and the panel.
+
+## Custody vs. trips
+
+`shipments.trip_id` says **how** a parcel travels; `shipments.assigned_courier_client_id` says
+**who physically holds it right now**. The two are independent:
+
+- Assigning a parcel to a trip sets custody to that trip's courier (when the trip names one).
+- Removing it from a trip, completing or cancelling the trip **leaves custody untouched** —
+  the parcel is still in someone's bag.
+- A parcel can sit with a courier who has no trip planned yet (a handover), and the last mile
+  (`at_destination → delivered`) needs no trip at all.
+- Handover is explicit: panel **Shipment → Custody** (`POST /api/admin/shipments/{id}/courier`),
+  optionally detaching from the trip and/or stepping the status one back. The receiving courier
+  gets an operational Telegram push, the recipient a short "your parcel is now with …" note.
+- Handing over is rejected for `delivered`, `cancelled` and `lost` parcels (revert the status
+  first).
+
+## Status rollback
+
+Statuses can be stepped **one step back** along the main path, for fixing a mis-click:
+
+| From | Back to |
+|---|---|
+| `picked_up` | `registered` |
+| `in_transit` | `picked_up` |
+| `at_destination` | `in_transit` |
+| `delivered` | `at_destination` |
+| `lost` | `in_transit` (found again) |
+
+`cancelled` stays terminal. A rollback writes `Status reverted: DELIVERED → AT DESTINATION` to the
+timeline; leaving `delivered` clears `delivered_at` and sends the recipient a correction push.
+Other rollbacks are timeline-only (the recipient already knows the parcel exists).
+
 ## Multi-courier
 
 `uts-admins` may contain several people; the app tracks **who actually travels**.
@@ -135,15 +183,19 @@ recipient anyway) and unlock attempts are rate-limited (5 per 10 minutes per IP+
 Admins can regenerate a code anytime.
 
 ### Status flow
-`Registered → Picked up → In transit → Delivered`, with `Cancelled` / `Lost` as side exits.
-Illegal transitions are rejected with a 409. Every change writes a timeline event automatically.
+`Registered → Picked up → In transit → At destination → Delivered`, with `Cancelled` / `Lost` as
+side exits. Illegal transitions are rejected with a 409. Every change writes a timeline event
+automatically. Each status can also be stepped **one step back** (see *Status rollback*) — the
+same endpoint handles both directions.
 
 ### Trips
 Planned trips (origin, destination, date) act as dispatch buckets. Shipments are assigned to
-*planned* trips only; trip destination must match shipment destination. Assignments and
-reassignments are auto-logged on the public timeline. Completing or cancelling a trip releases
-its shipments back to "unscheduled". Each trip carries a **courier** (the creator by default);
-their name rides along in the Telegram digests recipients get when the haul departs or arrives.
+*planned* trips only; trip destination (or a stop) must match shipment destination. Assignments
+and reassignments are auto-logged on the public timeline. Completing a trip keeps its shipments
+attached (history); cancelling it releases them back to "unscheduled" — custody is left alone in
+both cases. Each trip carries a **courier** (the creator by default); their name rides along in
+the Telegram digests recipients get when the haul departs or arrives, and joining the trip puts
+the parcel in that courier's custody.
 
 ### API keys
 Scripts can call the admin API without the browser/OIDC flow. Keys are minted in the admin
@@ -171,17 +223,19 @@ panel (nav: **API keys**) — each admin sees and revokes only their own.
 | `/api/track/{number}/unlock` | POST | rate-limited | `{ "pin": "123456" }` → full details |
 | `/auth/login`, `/auth/logout` | GET | – | OIDC redirects |
 | `/api/auth/state` | GET | – | `{ authenticated, isAdmin, name }` |
-| `/api/admin/shipments` | GET | admin (key: `shipments.read`) | list, filters: `q`, `status`, `city`, `clientId`, `tripId` (`none` = unassigned) |
+| `/api/admin/shipments` | GET | admin (key: `shipments.read`) | list, filters: `q`, `status`, `city`, `clientId`, `tripId` (`none` = unassigned), `courierId` (`none` = no custodian) |
 | `/api/admin/shipments` | POST | admin (key: `shipments.write`) | create → `{ pin, shipment }` (PIN shown once) |
 | `/api/admin/shipments/{id}` | GET | admin (key: `shipments.read`) | detail + timeline |
-| `…/{id}/status` | POST | admin (key: `shipments.write`) | `{ "status": "picked_up" }` — validates transitions |
-| `…/{id}/trip` | POST | admin (key: `shipments.write`) | `{ "tripId": 3 }` or `{ "tripId": null }` |
+| `…/{id}/status` | POST | admin (key: `shipments.write`) | `{ "status": "picked_up" }` — validates transitions, incl. the one-step rollbacks |
+| `…/{id}/trip` | POST | admin (key: `shipments.write`) | `{ "tripId": 3 }` or `{ "tripId": null }` (custody follows the trip courier) |
+| `…/{id}/courier` | POST | admin (key: `shipments.write`) | `{ "courierClientId": 7, "releaseFromTrip": true, "revertStatus": false, "note": "…" }` — custody handover; `courierClientId: null` clears it |
 | `…/{id}/events` | POST | admin (key: `shipments.write`) | `{ "message": "..." }` manual timeline note |
 | `…/{id}/notes` | POST | admin (key: `shipments.write`) | internal notes update |
 | `…/{id}/pin` | POST | admin (key: `shipments.write`) | regenerate access code |
 | `/api/admin/clients` | GET/POST/PUT | admin (key: `clients.read/write`) | client records (name, contact, telegram chat id, notes) |
 | `/api/admin/cities` | GET/POST/PUT | admin (key: `cities.read/write`) | city codes + activation toggle |
 | `/api/admin/trips` | GET/POST/PUT | admin (key: `trips.read/write`) | planned trips |
+| `…/trips/{id}/shipments/from-courier` | POST | admin (key: `trips.write`) | load the courier's waiting parcels (custody, no trip, destination on the route) → `{ added, skipped }` |
 | `/api/admin/keys` | GET/POST/… | admin session only | own API keys — mint, list, revoke (no key access, ever) |
 
 ## CI → GHCR

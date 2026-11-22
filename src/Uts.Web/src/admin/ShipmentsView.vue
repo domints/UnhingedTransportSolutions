@@ -34,6 +34,11 @@
         <option value="">All cities</option>
         <option v-for="c in cities" :key="c.code" :value="c.code">{{ c.code }} · {{ c.name }}</option>
       </select>
+      <select v-model="courierFilter" @change="reload" title="Filter by who physically holds the parcel">
+        <option value="">Any custodian</option>
+        <option value="none">No custodian</option>
+        <option v-for="c in clients" :key="c.id" :value="String(c.id)">{{ c.name }}</option>
+      </select>
     </div>
 
     <div class="card" style="overflow-x:auto">
@@ -48,6 +53,7 @@
             <th>Mode</th>
             <th>Status</th>
             <th>Trip</th>
+            <th>Custodian</th>
             <th>Created</th>
           </tr>
         </thead>
@@ -69,6 +75,12 @@
               <template v-if="s.tripTitle">
                 <span class="badge badge--trip">{{ s.tripTitle }}</span>
                 <div v-if="s.tripPlannedDate" class="small muted">{{ fmtDate(s.tripPlannedDate) }}</div>
+              </template>
+              <span v-else class="muted small">—</span>
+            </td>
+            <td>
+              <template v-if="s.assignedCourierName">
+                <span class="badge badge--trip">{{ s.assignedCourierName }}</span>
               </template>
               <span v-else class="muted small">—</span>
             </td>
@@ -101,6 +113,7 @@ const allStatuses = Object.keys(STATUS_LABELS)
 const q = ref('')
 const statusFilter = ref('')
 const cityFilter = ref('')
+const courierFilter = ref('')
 const modalOpen = ref(false)
 const created = ref<{ number: string; pin: string } | null>(null)
 const activeCities = computed(() => cities.value.filter((c) => c.active))
@@ -112,6 +125,7 @@ async function reload() {
   if (q.value.trim()) params.set('q', q.value.trim())
   if (statusFilter.value) params.set('status', statusFilter.value)
   if (cityFilter.value) params.set('city', cityFilter.value)
+  if (courierFilter.value) params.set('courierId', courierFilter.value)
   const qs = params.toString()
   shipments.value = await api.get<ShipmentListItem[]>(`/api/admin/shipments${qs ? '?' + qs : ''}`)
 }

@@ -325,6 +325,7 @@ label {
 }
 .timeline__dot--status { background: var(--warn); }
 .timeline__dot--trip { background: var(--accent); }
+.timeline__dot--courier { background: var(--blue); }
 .timeline__dot--note { background: var(--neutral); }
 .timeline__dot--created { background: var(--navy); }
 .timeline__msg { font-weight: 500; }

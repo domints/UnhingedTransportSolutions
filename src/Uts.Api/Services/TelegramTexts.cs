@@ -8,7 +8,8 @@ public static class TelegramTexts
         "UTS - powiadomienia o paczkach 📦\n\n" +
         "/start <kod> - powiąż ten czat ze swoimi paczkami (kod dostaniesz na stronie śledzenia lub od kuriera)\n" +
         "/notifications - wyłącz lub włącz powiadomienia 🔔/🔕\n\n" +
-        "Kurier ma też komendy operacyjne: /leaving, /arrived, /deliver, /packlist";
+        "Kurier ma też komendy operacyjne: /leaving, /arrived, /deliver, /packlist\n" +
+        "Dostałeś paczkę do przekazania? /waiting pokaże, co masz w rękach.";
 
     public const string NoBinding =
         "Ten czat nie jest jeszcze powiązany z żadnym odbiorcą.\n" +
@@ -71,12 +72,45 @@ public static class TelegramTexts
     public static string NotesCleared(string number)
         => $"Informacja o paczce {number} została usunięta 📝";
 
+    /// <summary>Operational push to the courier who now holds the parcel.</summary>
+    public static string HandoverToCourier(string number, string? destinationName)
+        => $"📦 Masz paczkę {number} → {destinationName ?? "?"}.\n" +
+           "Zawieź ją dalej albo przekaż dalej — /waiting pokaże, co masz w rękach.";
+
+    /// <summary>Recipient-side note that the parcel changed hands.</summary>
+    public static string HandoverRecipient(string number, string? courierName)
+        => $"Paczka {number} jest teraz u {(string.IsNullOrWhiteSpace(courierName) ? "innego kuriera" : courierName)} 📦";
+
+    /// <summary>Correction after a rollback out of 'delivered' (recipient saw the wrong push).</summary>
+    public static string StatusCorrection(string number, string status)
+        => $"Korekta statusu paczki {number}: {StatusLabel(status)}. Przepraszamy za zamieszanie.";
+
+    /// <summary>Middleman's custody list — one message per parcel.</summary>
+    public static string WaitingItem(string number, string status, string recipient, string destination)
+        => $"📦 {number} → {destination}\nOdbiorca: {recipient}\nStatus: {StatusLabel(status)}";
+
+    public const string WaitingEmpty =
+        "Nie masz teraz żadnych paczek w pieczy. 📭";
+
+    public const string CustodyConfirmed =
+        "Potwierdzone ✅";
+
+    public const string NotYourCustody =
+        "Ta paczka nie jest w Twojej pieczy.";
+
+    public const string ShipmentClosed =
+        "Ta paczka jest już zamknięta (dostarczona, anulowana albo zaginiona).";
+
+    public const string NotYourTrip =
+        "To nie Twoja podróż.";
+
     public static string HelpCourier()
         => "Komendy kuriera:\n" +
-           "/leaving — oznacz wszystkie paczki z najbliższej podróży jako w drodze\n" +
+           "/leaving — oznacz wszystkie paczki z Twojej najbliższej podróży jako w drodze\n" +
            "/arrived — oznacz wszystkie jako dotarłe do miasta docelowego (podróż = dokończona)\n" +
            "/deliver — dostarczaj paczki pojedynczo\n" +
-           "/packlist — wykaz paczek najbliższej podróży";
+           "/packlist — wykaz paczek Twojej najbliższej podróży\n" +
+           "/waiting — paczki, które masz teraz w rękach";
 
     private static string Join(IEnumerable<string> numbers) => string.Join(", ", numbers);
 }

@@ -30,20 +30,9 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
     public async Task EnqueueShipmentStatusAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, long shipmentId, string status)
     {
-        var r = await conn.QuerySingleOrDefaultAsync<(string? ChatId, bool Notifications, string Number, string? DestinationName, string? CourierName)>(
-            """
-            SELECT c.telegram_chat_id::text,
-                   c.telegram_notifications,
-                   s.tracking_number,
-                   dc.name,
-                   cc.name
-            FROM shipments s
-            JOIN clients c ON c.id = s.recipient_id
-            JOIN cities dc ON dc.code = s.destination_code
-            LEFT JOIN trips t ON t.id = s.trip_id
-            LEFT JOIN clients cc ON cc.id = t.courier_client_id
-            WHERE s.id = @id
-            """, new { id = shipmentId });
+        var r = await LoadRecipientAsync(conn, shipmentId);
+        if (r?.Number is null)
+            return;
         if (r.ChatId is null)
         {
             logger.LogInformation("Telegram: recipient push SKIPPED for {number} ({status}) — recipient has no chat id.",
@@ -62,6 +51,84 @@ public sealed class TelegramNotifier(TelegramOptions options, Database db, ILogg
             r.Number, status, r.ChatId);
         await EnqueueAsync(conn, tx, r.ChatId, text, TrackKeyboard(r.Number, maxButtons: 1));
     }
+
+    /// <summary>Correction push after a delivered parcel was rolled back
+    /// (delivered → at_destination): the recipient already got the "delivered"
+    /// message, so a silent timeline-only change would look like a glitch.</summary>
+    public async Task EnqueueStatusCorrectionAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, long shipmentId, string status)
+    {
+        var r = await LoadRecipientAsync(conn, shipmentId);
+        if (r?.Number is null || !r.Notifications || r.ChatId is null)
+            return;
+
+        logger.LogInformation("Telegram: status correction for {number} ({status}) → chat {chatId}.",
+            r.Number, status, r.ChatId);
+        await EnqueueAsync(conn, tx, r.ChatId, TelegramTexts.StatusCorrection(r.Number, status),
+            TrackKeyboard(r.Number, maxButtons: 1));
+    }
+
+    /// <summary>
+    /// Operational push to the courier who just received the parcel. This is
+    /// work, not a recipient notification: it goes to the holder's chat even if
+    /// they muted recipient updates (a chat can serve several client rows).
+    /// </summary>
+    public async Task EnqueueCourierHandoverAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, long shipmentId, long courierClientId)
+    {
+        var r = await conn.QuerySingleOrDefaultAsync<(string? ChatId, string? Number, string? DestinationName)>(
+            """
+            SELECT c.telegram_chat_id::text, s.tracking_number, dc.name
+            FROM clients c
+            JOIN shipments s ON s.id = @id
+            LEFT JOIN cities dc ON dc.code = s.destination_code
+            WHERE c.id = @courierClientId
+            """, new { id = shipmentId, courierClientId });
+        if (r.Number is null)
+            return;
+        if (r.ChatId is null)
+        {
+            logger.LogInformation("Telegram: handover push SKIPPED for {number} — custodian has no chat id.", r.Number);
+            return;
+        }
+
+        logger.LogInformation("Telegram: handover push for {number} → custodian chat {chatId}.", r.Number, r.ChatId);
+        await EnqueueAsync(conn, tx, r.ChatId, TelegramTexts.HandoverToCourier(r.Number, r.DestinationName),
+            TrackKeyboard(r.Number, maxButtons: 1));
+    }
+
+    /// <summary>Short recipient push: "your parcel is now with Wiktor".</summary>
+    public async Task EnqueueHandoverRecipientAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, long shipmentId, string? courierName)
+    {
+        var r = await LoadRecipientAsync(conn, shipmentId);
+        if (r?.Number is null || !r.Notifications || r.ChatId is null)
+            return;
+
+        logger.LogInformation("Telegram: handover push for {number} → recipient chat {chatId} (now with {courier}).",
+            r.Number, r.ChatId, courierName);
+        await EnqueueAsync(conn, tx, r.ChatId, TelegramTexts.HandoverRecipient(r.Number, courierName),
+            TrackKeyboard(r.Number, maxButtons: 1));
+    }
+
+    private sealed record RecipientTarget(
+        string? ChatId, bool Notifications, string? Number, string? DestinationName, string? CourierName);
+
+    private static Task<RecipientTarget?> LoadRecipientAsync(NpgsqlConnection conn, long shipmentId)
+        => conn.QuerySingleOrDefaultAsync<RecipientTarget>(
+            """
+            SELECT c.telegram_chat_id::text AS ChatId,
+                   c.telegram_notifications AS Notifications,
+                   s.tracking_number        AS Number,
+                   dc.name                  AS DestinationName,
+                   cc.name                  AS CourierName
+            FROM shipments s
+            JOIN clients c ON c.id = s.recipient_id
+            JOIN cities dc ON dc.code = s.destination_code
+            LEFT JOIN trips t ON t.id = s.trip_id
+            LEFT JOIN clients cc ON cc.id = t.courier_client_id
+            WHERE s.id = @id
+            """, new { id = shipmentId });
 
     /// <summary>Push when the internal notes are updated (or cleared): the
     /// recipient receives the new content directly in the chat — same audience

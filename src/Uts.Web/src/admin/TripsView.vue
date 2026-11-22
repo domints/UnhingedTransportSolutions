@@ -57,6 +57,46 @@
         {{ bulkResult }}
       </p>
 
+      <div v-if="selected.status === 'planned'" style="margin-top:1.2rem; border-top:1px solid var(--line); padding-top:1rem">
+        <h3 style="font-size:.95rem; margin-bottom:.3rem">Waiting for {{ selected.courierName ?? 'this courier' }}</h3>
+        <p class="muted small">
+          Parcels in this courier's custody that are not on any trip yet — handovers waiting for a ride.
+        </p>
+        <p v-if="!selected.courierClientId" class="callout callout--warn small">
+          This trip has no courier. Pick one in the trip form to see their waiting queue.
+        </p>
+        <template v-else>
+          <p v-if="waiting.length === 0" class="empty">Nothing waiting — the courier's hands are empty.</p>
+          <table v-else class="table">
+            <thead>
+              <tr><th>Number</th><th>Destination</th><th>Status</th><th>On this route</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="s in waiting" :key="s.id" style="cursor:default">
+                <td class="mono">{{ s.trackingNumber }}</td>
+                <td class="mono">{{ s.destinationCode }}</td>
+                <td><StatusBadge :status="s.status" /></td>
+                <td class="small" :class="covers(s.destinationCode) ? '' : 'muted'">
+                  {{ covers(s.destinationCode) ? 'yes' : 'no' }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="toolbar" style="margin-top:.8rem">
+            <button
+              class="btn btn--primary"
+              :disabled="!waiting.length"
+              title="Put every waiting parcel whose destination is on this route onto the trip"
+              @click="loadFromCourier"
+            >
+              ⤵ Load matching parcels
+            </button>
+          </div>
+          <p v-if="loadResult" class="callout callout--ok small" style="margin-top:.8rem">{{ loadResult }}</p>
+          <p v-if="loadError" class="callout callout--error small" style="margin-top:.8rem">{{ loadError }}</p>
+        </template>
+      </div>
+
       <div class="toolbar" style="margin-top:1rem">
         <button
           class="btn btn--primary"
@@ -265,6 +305,9 @@ const candidates = ref<ShipmentListItem[]>([])
 const pickError = ref('')
 const error = ref('')
 const bulkResult = ref('')
+const waiting = ref<ShipmentListItem[]>([])
+const loadResult = ref('')
+const loadError = ref('')
 
 const templates = ref<TripTemplate[]>([])
 const templatesOpen = ref(false)
@@ -336,12 +379,48 @@ async function select(t: TripListItem) {
   }
   selected.value = t
   bulkResult.value = ''
+  loadResult.value = ''
+  loadError.value = ''
   await loadTripShipments()
 }
 
 async function loadTripShipments() {
   if (!selected.value) return
   selectedShipments.value = await api.get<ShipmentListItem[]>(`/api/admin/shipments?tripId=${selected.value.id}`)
+  // Handover queue: everything this courier holds that is not on a trip yet.
+  // Custody outlives delivery, so closed parcels are filtered out (history, not queue).
+  waiting.value = selected.value.courierClientId
+    ? (await api.get<ShipmentListItem[]>(`/api/admin/shipments?courierId=${selected.value.courierClientId}&tripId=none`))
+        .filter((s) => !['delivered', 'cancelled', 'lost'].includes(s.status))
+    : []
+}
+
+/** Does this trip's route cover a destination? Mirrors TripRoute.Covers. */
+function covers(destinationCode: string) {
+  if (!selected.value) return false
+  return selected.value.destinationCode === destinationCode || selected.value.stops.includes(destinationCode)
+}
+
+async function loadFromCourier() {
+  if (!selected.value) return
+  loadResult.value = ''
+  loadError.value = ''
+  try {
+    const r = await api.post<{ added: string[]; skipped: { trackingNumber: string; destinationCode: string; reason: string }[] }>(
+      `/api/admin/trips/${selected.value.id}/shipments/from-courier`,
+      { courierClientId: selected.value.courierClientId })
+    const parts = [`${r.added.length} parcel${r.added.length === 1 ? '' : 's'} loaded onto the trip.`]
+    if (r.skipped.length) {
+      const skipped = r.skipped.map((s) =>
+        `${s.trackingNumber} (${s.reason === 'route' ? `${s.destinationCode} is off route` : s.reason})`)
+      parts.push(`Skipped: ${skipped.join(', ')}.`)
+    }
+    loadResult.value = parts.join(' ')
+    await loadTripShipments()
+    await reload()
+  } catch (e) {
+    loadError.value = e instanceof Error ? e.message : 'Loading the waiting queue failed.'
+  }
 }
 
 function openAdd() {

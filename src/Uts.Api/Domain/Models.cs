@@ -75,6 +75,8 @@ public record ShipmentListItem(
     long? TripId,
     string? TripTitle,
     DateTime? TripPlannedDate,
+    long? AssignedCourierClientId,
+    string? AssignedCourierName,
     DateTime CreatedAt);
 
 /// <summary>Full shipment as returned to the admin panel.</summary>
@@ -98,6 +100,8 @@ public record ShipmentDetail(
     string? TripTitle,
     DateTime? TripPlannedDate,
     string? TripStatus,
+    long? AssignedCourierClientId,
+    string? AssignedCourierName,
     DateTime CreatedAt,
     DateTime UpdatedAt,
     DateTime? DeliveredAt,

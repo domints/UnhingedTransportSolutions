@@ -339,6 +339,69 @@ public static class AdminCatalogEndpoints
             return Results.Ok(new { from = result.From, to = result.To, updated = result.Updated, skipped = result.Skipped });
         });
 
+        // Handover helper: everything the trip's courier physically holds but has
+        // not loaded onto a trip yet, whose destination lies on this route, joins
+        // the haul. The courier's custody is kept; the trip's courier wins if the
+        // two differ (same rule as the single-shipment assignment).
+        g.MapPost("/{id:long}/shipments/from-courier", [AdminPerm(Perm.TripsWrite)] async (long id, LoadFromCourierRequest? req, Database db, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            var trip = await conn.QuerySingleOrDefaultAsync<(string Title, DateTime? PlannedDate, string Status, string? OriginCode, string? DestinationCode, long? CourierClientId)>(
+                "SELECT title, planned_date, status, origin_code, destination_code, courier_client_id FROM trips WHERE id = @id",
+                new { id });
+            if (trip.Title is null)
+                return Results.NotFound(new { error = "Trip not found." });
+            if (trip.Status != "planned")
+                return Results.Json(
+                    new { error = $"Trip '{trip.Title}' is {trip.Status} — only planned trips take shipments." },
+                    statusCode: StatusCodes.Status409Conflict);
+
+            var courierId = req?.CourierClientId ?? trip.CourierClientId;
+            if (courierId is null)
+                return Bad("This trip has no courier — pick one in the trip form first.");
+
+            var stops = await TripRoute.StopsAsync(conn, id);
+            var waiting = (await conn.QueryAsync<(long Id, string Number, string DestinationCode, string Status)>(
+                """
+                SELECT id, tracking_number, destination_code, status
+                FROM shipments
+                WHERE assigned_courier_client_id = @courierId
+                  AND trip_id IS NULL
+                  AND status NOT IN ('delivered', 'cancelled', 'lost') -- custody outlives delivery; closed parcels are history, not queue
+                ORDER BY created_at
+                """, new { courierId })).AsList();
+
+            var added = new List<string>();
+            var skipped = new List<object>();
+            var when = trip.PlannedDate is { } d ? $" (planned {d:yyyy-MM-dd})" : "";
+
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            foreach (var s in waiting)
+            {
+                if (!TripRoute.Covers(trip.DestinationCode, stops, s.DestinationCode))
+                {
+                    skipped.Add(new { trackingNumber = s.Number, destinationCode = s.DestinationCode, reason = "route" });
+                    continue;
+                }
+
+                await conn.ExecuteAsync(
+                    """
+                    UPDATE shipments
+                    SET trip_id = @id,
+                        assigned_courier_client_id = COALESCE(@courier, assigned_courier_client_id),
+                        updated_at = now()
+                    WHERE id = @sid;
+                    INSERT INTO shipment_events (shipment_id, type, message)
+                    VALUES (@sid, 'trip', @msg);
+                    """,
+                    new { id, sid = s.Id, courier = trip.CourierClientId, msg = $"Added to trip \"{trip.Title}\"{when}." }, tx);
+                added.Add(s.Number);
+            }
+            await tx.CommitAsync(ct);
+
+            return Results.Ok(new { added, skipped });
+        });
+
         // Spawn one (or the mirrored return) trip from a prior-saved route template.
         g.MapPost("/from-template/{templateId:long}", [AdminPerm(Perm.TripsWrite)] async (long templateId, InstantiateTripRequest req, Database db, AdminIdentity identity, HttpContext http, CancellationToken ct) =>
         {
@@ -559,4 +622,7 @@ public static class AdminCatalogEndpoints
         string? Title, string? OriginCode, string? DestinationCode, List<string>? Stops, string? TransportMode);
 
     public sealed record TripBulkStatusRequest(string? Status);
+
+    /// <summary>Optional explicit courier; defaults to the trip's own courier.</summary>
+    public sealed record LoadFromCourierRequest(long? CourierClientId);
 }

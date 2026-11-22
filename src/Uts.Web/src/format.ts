@@ -12,12 +12,22 @@ export const STATUS_LABELS: Record<string, string> = {
 
 export const TRANSITIONS: Record<string, string[]> = {
   registered: ['picked_up', 'cancelled'],
-  picked_up: ['in_transit', 'cancelled', 'lost'],
-  in_transit: ['at_destination', 'delivered', 'lost'],
-  at_destination: ['delivered', 'lost'],
-  delivered: [],
+  picked_up: ['in_transit', 'registered', 'cancelled', 'lost'],
+  in_transit: ['at_destination', 'picked_up', 'delivered', 'lost'],
+  at_destination: ['delivered', 'in_transit', 'lost'],
+  delivered: ['at_destination'],
   cancelled: [],
-  lost: [],
+  lost: ['in_transit'],
+}
+
+/** One step back along the main path — mirrors ShipmentStatus.BackTransitions.
+ *  `cancelled` stays terminal; `lost → in_transit` means the parcel turned up. */
+export const BACK_TRANSITIONS: Record<string, string> = {
+  picked_up: 'registered',
+  in_transit: 'picked_up',
+  at_destination: 'in_transit',
+  delivered: 'at_destination',
+  lost: 'in_transit',
 }
 
 export const MODE_LABELS: Record<string, string> = {

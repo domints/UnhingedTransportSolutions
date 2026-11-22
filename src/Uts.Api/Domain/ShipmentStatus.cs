@@ -28,16 +28,37 @@ public static class ShipmentStatus
     public static readonly Dictionary<string, string[]> Transitions = new()
     {
         [Registered]    = [PickedUp, Cancelled],
-        [PickedUp]      = [InTransit, Cancelled, Lost],
-        [InTransit]     = [AtDestination, Delivered, Lost],
-        [AtDestination] = [Delivered, Lost],
-        [Delivered]     = [],
+        // Back-edges are the one-step "undo" of the main path (see BackTransitions):
+        // a mis-click in the panel must be fixable without a psql session.
+        [PickedUp]      = [InTransit, Registered, Cancelled, Lost],
+        [InTransit]     = [AtDestination, PickedUp, Delivered, Lost],
+        [AtDestination] = [Delivered, InTransit, Lost],
+        [Delivered]     = [AtDestination],
         [Cancelled]     = [],
-        [Lost]          = [],
+        [Lost]          = [InTransit], // found parcel
+    };
+
+    /// <summary>The single backward step allowed from each status. <c>cancelled</c>
+    /// stays terminal; <c>lost → in_transit</c> is the "found it again" path.</summary>
+    public static readonly Dictionary<string, string> BackTransitions = new()
+    {
+        [PickedUp]      = Registered,
+        [InTransit]     = PickedUp,
+        [AtDestination] = InTransit,
+        [Delivered]     = AtDestination,
+        [Lost]          = InTransit,
     };
 
     public static bool CanTransition(string from, string to)
         => Transitions.TryGetValue(from, out var allowed) && allowed.Contains(to);
+
+    /// <summary>True when <paramref name="to"/> is the undo step of <paramref name="from"/>.</summary>
+    public static bool IsBackward(string from, string to)
+        => BackTransitions.TryGetValue(from, out var back) && back == to;
+
+    /// <summary>The one-step-back status, or null when the parcel cannot go back.</summary>
+    public static string? PreviousStatus(string from)
+        => BackTransitions.GetValueOrDefault(from);
 
     public static string Label(string status)
         => Labels.GetValueOrDefault(status, status);
